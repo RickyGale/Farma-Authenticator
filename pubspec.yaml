@@ -1,13 +1,13 @@
 name: farma_auth
-description: "An app to authenticate users."
+description: "Internal use app for Farmaconsult employees to authenticate themself."
 publish_to: 'none'
-version: 1.13.00
+version: 1.13.00+2
 
 environment:
   sdk: ^3.8.1
 
 dependencies:
-  android_id: ^0.4.0
+  android_id: ^0.5.1
   device_info_plus: ^12.1.0
   flutter:
     sdk: flutter  
@@ -25,9 +25,14 @@ dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.4
 
 flutter:
   uses-material-design: true
   assets:
     - windows/runner/resources/tray_icon.ico
     - windows/runner/resources/app_icon.ico
+
+flutter_launcher_icons:
+  android: true
+  image_path: lib/assets/icons/app_icon.png
