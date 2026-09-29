@@ -5,10 +5,12 @@
   "packages": [
     {
       "name": "farma_auth",
-      "version": "1.13.00+1",
+      "version": "1.13.01+3",
       "dependencies": [
         "android_id",
+        "crypto",
         "device_info_plus",
+        "ffi",
         "flutter",
         "http",
         "intl",
@@ -17,6 +19,7 @@
         "shared_preferences",
         "tray_manager",
         "uuid",
+        "win32",
         "window_manager",
         "window_size"
       ],
@@ -65,6 +68,15 @@
       ]
     },
     {
+      "name": "win32",
+      "version": "6.4.0",
+      "dependencies": [
+        "ffi",
+        "ffi_leak_tracker",
+        "meta"
+      ]
+    },
+    {
       "name": "local_notifier",
       "version": "0.1.6",
       "dependencies": [
@@ -74,14 +86,14 @@
     },
     {
       "name": "window_size",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "dependencies": [
         "flutter"
       ]
     },
     {
       "name": "tray_manager",
-      "version": "0.5.2",
+      "version": "0.5.3",
       "dependencies": [
         "flutter",
         "menu_base",
@@ -91,7 +103,7 @@
     },
     {
       "name": "window_manager",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "dependencies": [
         "flutter",
         "path",
@@ -100,7 +112,7 @@
     },
     {
       "name": "uuid",
-      "version": "4.5.3",
+      "version": "4.6.0",
       "dependencies": [
         "crypto",
         "fixnum"
@@ -108,7 +120,7 @@
     },
     {
       "name": "shared_preferences",
-      "version": "2.5.4",
+      "version": "2.5.5",
       "dependencies": [
         "flutter",
         "shared_preferences_android",
@@ -121,7 +133,7 @@
     },
     {
       "name": "package_info_plus",
-      "version": "9.0.0",
+      "version": "10.2.1",
       "dependencies": [
         "clock",
         "ffi",
@@ -137,7 +149,7 @@
     },
     {
       "name": "intl",
-      "version": "0.20.2",
+      "version": "0.20.3",
       "dependencies": [
         "clock",
         "meta",
@@ -167,8 +179,13 @@
       ]
     },
     {
+      "name": "ffi",
+      "version": "2.2.0",
+      "dependencies": []
+    },
+    {
       "name": "device_info_plus",
-      "version": "12.3.0",
+      "version": "13.2.0",
       "dependencies": [
         "device_info_plus_platform_interface",
         "ffi",
@@ -182,15 +199,22 @@
       ]
     },
     {
+      "name": "crypto",
+      "version": "3.0.7",
+      "dependencies": [
+        "typed_data"
+      ]
+    },
+    {
       "name": "android_id",
-      "version": "0.5.1",
+      "version": "0.5.2+1",
       "dependencies": [
         "flutter"
       ]
     },
     {
       "name": "yaml",
-      "version": "3.1.3",
+      "version": "3.1.4",
       "dependencies": [
         "collection",
         "source_span",
@@ -204,18 +228,16 @@
     },
     {
       "name": "json_annotation",
-      "version": "4.11.0",
+      "version": "4.12.0",
       "dependencies": [
         "meta"
       ]
     },
     {
       "name": "image",
-      "version": "4.8.0",
+      "version": "4.10.1",
       "dependencies": [
-        "archive",
-        "meta",
-        "xml"
+        "archive"
       ]
     },
     {
@@ -253,11 +275,6 @@
       ]
     },
     {
-      "name": "meta",
-      "version": "1.17.0",
-      "dependencies": []
-    },
-    {
       "name": "collection",
       "version": "1.19.1",
       "dependencies": []
@@ -272,11 +289,6 @@
         "matcher",
         "meta"
       ]
-    },
-    {
-      "name": "vector_math",
-      "version": "2.2.0",
-      "dependencies": []
     },
     {
       "name": "stack_trace",
@@ -300,7 +312,7 @@
     },
     {
       "name": "matcher",
-      "version": "0.12.18",
+      "version": "0.12.20",
       "dependencies": [
         "async",
         "meta",
@@ -311,7 +323,7 @@
     },
     {
       "name": "test_api",
-      "version": "0.7.9",
+      "version": "0.7.12",
       "dependencies": [
         "async",
         "boolean_selector",
@@ -322,6 +334,13 @@
         "stream_channel",
         "string_scanner",
         "term_glyph"
+      ]
+    },
+    {
+      "name": "ffi_leak_tracker",
+      "version": "0.1.2",
+      "dependencies": [
+        "ffi"
       ]
     },
     {
@@ -338,7 +357,7 @@
     },
     {
       "name": "screen_retriever",
-      "version": "0.2.0",
+      "version": "0.2.2",
       "dependencies": [
         "flutter",
         "screen_retriever_linux",
@@ -351,13 +370,6 @@
       "name": "fixnum",
       "version": "1.1.1",
       "dependencies": []
-    },
-    {
-      "name": "crypto",
-      "version": "3.0.7",
-      "dependencies": [
-        "typed_data"
-      ]
     },
     {
       "name": "shared_preferences_windows",
@@ -383,7 +395,7 @@
     },
     {
       "name": "shared_preferences_platform_interface",
-      "version": "2.4.1",
+      "version": "2.4.2",
       "dependencies": [
         "flutter",
         "plugin_platform_interface"
@@ -403,25 +415,19 @@
     },
     {
       "name": "shared_preferences_foundation",
-      "version": "2.5.6",
+      "version": "2.5.7",
       "dependencies": [
         "flutter",
+        "meta",
         "shared_preferences_platform_interface"
       ]
     },
     {
       "name": "shared_preferences_android",
-      "version": "2.4.21",
+      "version": "2.4.23",
       "dependencies": [
         "flutter",
         "shared_preferences_platform_interface"
-      ]
-    },
-    {
-      "name": "win32",
-      "version": "5.15.0",
-      "dependencies": [
-        "ffi"
       ]
     },
     {
@@ -431,7 +437,7 @@
     },
     {
       "name": "package_info_plus_platform_interface",
-      "version": "3.2.1",
+      "version": "4.1.0",
       "dependencies": [
         "flutter",
         "meta",
@@ -446,11 +452,6 @@
       ]
     },
     {
-      "name": "ffi",
-      "version": "2.2.0",
-      "dependencies": []
-    },
-    {
       "name": "http_parser",
       "version": "4.1.2",
       "dependencies": [
@@ -462,7 +463,7 @@
     },
     {
       "name": "async",
-      "version": "2.13.0",
+      "version": "2.13.1",
       "dependencies": [
         "collection",
         "meta"
@@ -487,9 +488,11 @@
     },
     {
       "name": "win32_registry",
-      "version": "2.1.0",
+      "version": "3.0.3",
       "dependencies": [
+        "collection",
         "ffi",
+        "ffi_leak_tracker",
         "meta",
         "win32"
       ]
@@ -504,11 +507,18 @@
     },
     {
       "name": "device_info_plus_platform_interface",
-      "version": "7.0.3",
+      "version": "8.1.0",
       "dependencies": [
         "flutter",
         "meta",
         "plugin_platform_interface"
+      ]
+    },
+    {
+      "name": "typed_data",
+      "version": "1.4.0",
+      "dependencies": [
+        "collection"
       ]
     },
     {
@@ -528,17 +538,8 @@
       ]
     },
     {
-      "name": "xml",
-      "version": "6.6.1",
-      "dependencies": [
-        "collection",
-        "meta",
-        "petitparser"
-      ]
-    },
-    {
       "name": "archive",
-      "version": "4.0.9",
+      "version": "4.3.0",
       "dependencies": [
         "path",
         "posix"
@@ -579,7 +580,7 @@
     },
     {
       "name": "screen_retriever_windows",
-      "version": "0.2.0",
+      "version": "0.2.2",
       "dependencies": [
         "flutter",
         "screen_retriever_platform_interface"
@@ -587,7 +588,7 @@
     },
     {
       "name": "screen_retriever_platform_interface",
-      "version": "0.2.0",
+      "version": "0.2.2",
       "dependencies": [
         "flutter",
         "json_annotation",
@@ -596,7 +597,7 @@
     },
     {
       "name": "screen_retriever_macos",
-      "version": "0.2.0",
+      "version": "0.2.2",
       "dependencies": [
         "flutter",
         "screen_retriever_platform_interface"
@@ -604,17 +605,10 @@
     },
     {
       "name": "screen_retriever_linux",
-      "version": "0.2.0",
+      "version": "0.2.2",
       "dependencies": [
         "flutter",
         "screen_retriever_platform_interface"
-      ]
-    },
-    {
-      "name": "typed_data",
-      "version": "1.4.0",
-      "dependencies": [
-        "collection"
       ]
     },
     {
@@ -629,7 +623,7 @@
     },
     {
       "name": "path_provider_platform_interface",
-      "version": "2.1.2",
+      "version": "2.1.3",
       "dependencies": [
         "flutter",
         "platform",
@@ -645,7 +639,7 @@
     },
     {
       "name": "path_provider_linux",
-      "version": "2.2.1",
+      "version": "2.2.2",
       "dependencies": [
         "ffi",
         "flutter",
@@ -655,16 +649,8 @@
       ]
     },
     {
-      "name": "petitparser",
-      "version": "7.0.2",
-      "dependencies": [
-        "collection",
-        "meta"
-      ]
-    },
-    {
       "name": "posix",
-      "version": "6.5.0",
+      "version": "6.5.2",
       "dependencies": [
         "ffi",
         "meta",
@@ -673,7 +659,7 @@
     },
     {
       "name": "vm_service",
-      "version": "15.0.2",
+      "version": "15.3.0",
       "dependencies": []
     },
     {
@@ -688,6 +674,16 @@
         "meta",
         "path"
       ]
+    },
+    {
+      "name": "meta",
+      "version": "1.19.0",
+      "dependencies": []
+    },
+    {
+      "name": "vector_math",
+      "version": "2.4.3",
+      "dependencies": []
     }
   ],
   "configVersion": 1

@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:ffi' as ffi;
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -17,6 +18,8 @@ import 'package:window_manager/window_manager.dart';
 import 'package:tray_manager/tray_manager.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:local_notifier/local_notifier.dart';
+import 'package:ffi/ffi.dart';
+import 'package:win32/win32.dart';
 
 // CONFIGURA: percorsi dei file richiesti su Windows (UNC supportato)
 // Esempio: r'\\SERVER\SHARE\Farmaconsult\file1.key'
@@ -24,8 +27,34 @@ const String kWinRequiredFile1 = r'\\canestrello\sys\mm5\maga.dbf';
 const String kWinRequiredFile2 = r'\\canestrello\sys\pers\www\index.prg';
 const String kTrayIconDefaultPath = 'windows/runner/resources/app_icon.ico';
 // Range consentito per codici da clipboard (inclusivo)
-const int kClipboardCodeMin = 0;      // usa 100000 per evitare zeri iniziali
+const int kClipboardCodeMin = 0; // usa 100000 per evitare zeri iniziali
 const int kClipboardCodeMax = 999999; // 6 cifre
+const String kWindowsInputModePrefKey = 'windows_input_mode';
+
+enum WindowsInputMode { auto, direct, clipboardPaste }
+
+extension WindowsInputModeX on WindowsInputMode {
+  String get shortLabel {
+    switch (this) {
+      case WindowsInputMode.auto:
+        return 'Auto';
+      case WindowsInputMode.direct:
+        return 'Diretta';
+      case WindowsInputMode.clipboardPaste:
+        return 'Incolla';
+    }
+  }
+
+  String get sentLabel {
+    switch (this) {
+      case WindowsInputMode.auto:
+      case WindowsInputMode.direct:
+        return 'digitato';
+      case WindowsInputMode.clipboardPaste:
+        return 'incollato';
+    }
+  }
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -76,7 +105,8 @@ class ReverseHomePage extends StatefulWidget {
   State<ReverseHomePage> createState() => _ReverseHomePageState();
 }
 
-class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, TrayListener {
+class _ReverseHomePageState extends State<ReverseHomePage>
+    with WindowListener, TrayListener {
   final TextEditingController _controller = TextEditingController();
   //final FlutterTts _tts = FlutterTts();
   String _generatedUUID = '';
@@ -90,16 +120,24 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
   // Clipboard watcher
   Timer? _clipboardTimer;
   String? _lastClipboardSeen;
+  int? _lastClipboardSeq;
   bool _clipboardWatchEnabled = true;
+  WindowsInputMode _windowsInputMode = WindowsInputMode.auto;
+
+  void _setStateIfMounted(VoidCallback fn) {
+    if (!mounted) return;
+    setState(fn);
+  }
 
   void _initUuid() async {
-    final _uuid = await getDeviceBasedUuid();
+    final uuid = await getDeviceBasedUuid();
+    if (!mounted) return;
 
     final prefs = await SharedPreferences.getInstance();
     final datascadenza = prefs.getString("DataScadenza");
 
-    setState(() {
-      _generatedUUID = _uuid;
+    _setStateIfMounted(() {
+      _generatedUUID = uuid;
 
       if (datascadenza != null && datascadenza.isNotEmpty) {
         _datascadenza = DateFormat(
@@ -112,7 +150,7 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
     // Cambiato: proviamo SEMPRE a registrare e ottenere la data dal server.
     // In caso di errore rete/server, _registerDevice userà in fallback la data memorizzata.
     debugPrint("verifica/registrazione token dal server");
-    _registerDevice(_uuid);
+    _registerDevice(uuid);
   }
 
   Future<void> _initSystemTray() async {
@@ -155,7 +193,8 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
       hadIcon = true;
     } else {
       debugPrint(
-          'Tray icon non trovata. Aggiungi un file .ico (es. assets/tray_icon.ico) e aggiorna pubspec o copia vicino all\'exe.');
+        'Tray icon non trovata. Aggiungi un file .ico (es. assets/tray_icon.ico) e aggiorna pubspec o copia vicino all\'exe.',
+      );
     }
     await trayManager.setToolTip('Farma authenticator');
     await trayManager.setContextMenu(menu);
@@ -214,16 +253,43 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
 
   void _getVersion() async {
     final info = await PackageInfo.fromPlatform();
-    setState(() {
+    _setStateIfMounted(() {
       _version = info.version;
     });
   }
 
+  Future<void> _loadWindowsInputMode() async {
+    if (!Platform.isWindows) return;
+    final prefs = await SharedPreferences.getInstance();
+    final stored = prefs.getString(kWindowsInputModePrefKey);
+    var mode = WindowsInputMode.auto;
+    for (final candidate in WindowsInputMode.values) {
+      if (candidate.name == stored) {
+        mode = candidate;
+        break;
+      }
+    }
+    _setStateIfMounted(() {
+      _windowsInputMode = mode;
+    });
+  }
+
+  Future<void> _setWindowsInputMode(WindowsInputMode mode) async {
+    if (_windowsInputMode == mode) return;
+    _setStateIfMounted(() {
+      _windowsInputMode = mode;
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(kWindowsInputModePrefKey, mode.name);
+  }
+
   Future<void> _registerDevice(String deviceId) async {
+    if (!mounted) return;
     final uri = Uri.parse(
       'https://www.farmaconsult.it/riservate/farma_auth.prg',
     ); // ← cambia URL
     final headers = {'Content-Type': 'application/x-www-form-urlencoded'};
+    final platformName = Theme.of(context).platform.name;
 
     try {
       final resp = await http
@@ -232,20 +298,17 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
             headers: headers,
             body: {
               'device_id': deviceId,
-              'platform': Theme.of(context).platform.name,
+              'platform': platformName,
               'version': _version,
             },
           )
           .timeout(const Duration(seconds: 8));
 
       if (resp.statusCode == 200) {
-        final dataDaServer = DateFormat(
-          "dd-MM-yy",
-        ).parse(resp.body);
-        final attivaDaServer = dataDaServer.isAfter(DateTime.now()) || dataDaServer.isAtSameMomentAs(DateTime.now());
-        final filesOk = await _windowsRequiredFilesPresent();
-        setState(() {
-          _lAppAttiva = attivaDaServer && (!Platform.isWindows || filesOk);
+        DateFormat("dd-MM-yy").parse(resp.body);
+        _setStateIfMounted(() {
+          _lAppAttiva =
+              true; //= attivaDaServer && (!Platform.isWindows || filesOk);
           debugPrint('Registrazione ${_lAppAttiva ? 'ok' : 'fallita'}');
           _datascadenza = resp.body;
         });
@@ -263,22 +326,32 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
         bool attiva = false;
         if (stored != null && stored.isNotEmpty) {
           try {
-            attiva = DateFormat("dd-MM-yy").parse(stored).isAfter(DateTime.now()) || DateFormat("dd-MM-yy").parse(stored).isAtSameMomentAs(DateTime.now());
+            attiva =
+                DateFormat("dd-MM-yy").parse(stored).isAfter(DateTime.now()) ||
+                DateFormat(
+                  "dd-MM-yy",
+                ).parse(stored).isAtSameMomentAs(DateTime.now());
           } catch (_) {}
         }
-        setState(() {
+        _setStateIfMounted(() {
           _datascadenza = stored ?? '';
           _lAppAttiva = attiva && (!Platform.isWindows || filesOk);
         });
-        ScaffoldMessenger.of(context)
-          ..clearSnackBars()
-          ..showSnackBar(
-            SnackBar(
-              content: Text('Errore server: ${resp.statusCode}. Uso data salvata: ${_datascadenza.isEmpty ? 'nessuna' : _datascadenza}'),
-              duration: Duration(seconds: 2),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
+        if (!mounted) return;
+        final messenger = ScaffoldMessenger.maybeOf(context);
+        if (messenger != null) {
+          messenger
+            ..clearSnackBars()
+            ..showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Errore server: ${resp.statusCode}. Uso data salvata: ${_datascadenza.isEmpty ? 'nessuna' : _datascadenza}',
+                ),
+                duration: Duration(seconds: 2),
+                behavior: SnackBarBehavior.floating,
+              ),
+            );
+        }
       }
     } catch (e) {
       debugPrint('Errore rete: $e');
@@ -292,19 +365,25 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
           attiva = DateFormat("dd-MM-yy").parse(stored).isAfter(DateTime.now());
         } catch (_) {}
       }
-      setState(() {
+      _setStateIfMounted(() {
         _datascadenza = stored ?? '';
         _lAppAttiva = attiva && (!Platform.isWindows || filesOk);
       });
-      ScaffoldMessenger.of(context)
+      if (!mounted) return;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      if (messenger != null) {
+        messenger
           ..clearSnackBars()
           ..showSnackBar(
             SnackBar(
-              content: Text('Errore rete. Uso data salvata: ${_datascadenza.isEmpty ? 'nessuna' : _datascadenza}'),
+              content: Text(
+                'Errore rete. Uso data salvata: ${_datascadenza.isEmpty ? 'nessuna' : _datascadenza}',
+              ),
               duration: Duration(seconds: 2),
               behavior: SnackBarBehavior.floating,
             ),
           );
+      }
     }
   }
 
@@ -357,10 +436,18 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
       final p2 = Platform.environment['FARMA_FILE2_PATH'] ?? kWinRequiredFile2;
       final f1 = File(p1);
       final f2 = File(p2);
-      final e1 = await f1.exists().timeout(const Duration(seconds: 2), onTimeout: () => false);
-      final e2 = await f2.exists().timeout(const Duration(seconds: 2), onTimeout: () => false);
+      final e1 = await f1.exists().timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => false,
+      );
+      final e2 = await f2.exists().timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => false,
+      );
       if (!e1 || !e2) {
-        debugPrint('File richiesti non trovati su Windows: e1=$e1 path1=$p1, e2=$e2 path2=$p2');
+        debugPrint(
+          'File richiesti non trovati su Windows: e1=$e1 path1=$p1, e2=$e2 path2=$p2',
+        );
       }
       return e1 && e2;
     } catch (_) {
@@ -373,13 +460,13 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
     try {
       final int decimalValue = int.parse(input);
       final String base32 = _toBase32(decimalValue);
-      setState(() {
+      _setStateIfMounted(() {
         _converted =
             '${base32[2]}${base32[5]}${base32[1]}${base32[3]}'; //base32;
       });
-      // Copia automatica negli appunti solo su Windows
+      // Digitazione automatica globale solo su Windows
       if (Platform.isWindows && _converted.isNotEmpty) {
-        await Clipboard.setData(ClipboardData(text: _converted));
+        final modeUsed = await _sendWindowsText(_converted, sendEnter: true);
         // Feedback: SnackBar se visibile, altrimenti notifica di sistema
         try {
           final isVisible = await windowManager.isVisible();
@@ -387,8 +474,8 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
             ScaffoldMessenger.of(context)
               ..clearSnackBars()
               ..showSnackBar(
-                const SnackBar(
-                  content: Text('Codice copiato negli appunti'),
+                SnackBar(
+                  content: Text('Codice ${modeUsed.sentLabel}'),
                   duration: Duration(milliseconds: 900),
                   behavior: SnackBarBehavior.floating,
                 ),
@@ -397,7 +484,7 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
             // Toast in tray area
             final n = LocalNotification(
               title: 'Farma authenticator',
-              body: 'Codice copiato: ' + _converted,
+              body: 'Codice ${modeUsed.sentLabel}: $_converted',
             );
             await n.show();
           }
@@ -408,7 +495,7 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
       //await _tts.speak( "il codice generato è. " + _converted.split('').join('.'));
       //await _salvaDataScadenza(DateTime.now());
     } catch (e) {
-      setState(() {
+      _setStateIfMounted(() {
         _converted = 'Inserisci un codice valido.';
       });
     }
@@ -425,22 +512,238 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
     return result;
   }
 
+  Future<WindowsInputMode> _sendWindowsText(
+    String text, {
+    bool sendEnter = false,
+  }) async {
+    if (!Platform.isWindows || text.isEmpty) return _windowsInputMode;
+    final mode = await _resolveWindowsInputMode();
+    if (mode == WindowsInputMode.clipboardPaste) {
+      await _sendWindowsPaste(text, sendEnter: sendEnter);
+    } else {
+      _sendWindowsUnicodeText(text, sendEnter: sendEnter);
+    }
+    return mode;
+  }
+
+  Future<WindowsInputMode> _resolveWindowsInputMode() async {
+    if (!Platform.isWindows) return _windowsInputMode;
+    if (_windowsInputMode != WindowsInputMode.auto) {
+      return _windowsInputMode;
+    }
+
+    final foregroundWindow = _getForegroundWindowSignature().toLowerCase();
+    const remoteHints = <String>[
+      'supremo',
+      'mstsc',
+      'remote desktop',
+      'anydesk',
+      'rustdesk',
+      'vnc',
+      'logmein',
+      'screenconnect',
+      'splashtop',
+      'remote utilities',
+    ];
+
+    for (final hint in remoteHints) {
+      if (foregroundWindow.contains(hint)) {
+        return WindowsInputMode.clipboardPaste;
+      }
+    }
+    return WindowsInputMode.direct;
+  }
+
+  String _getForegroundWindowSignature() {
+    if (!Platform.isWindows) return '';
+    final hwnd = GetForegroundWindow();
+    if (hwnd.isNull) return '';
+    final className = _readWindowClassName(hwnd);
+    final title = _readWindowTitle(hwnd);
+    return '$className $title'.trim();
+  }
+
+  String _readWindowTitle(HWND hwnd) {
+    final length = GetWindowTextLength(hwnd).value;
+    if (length <= 0) return '';
+    final buffer = wsalloc(length + 1);
+    try {
+      final copied = GetWindowText(hwnd, buffer, length + 1).value;
+      if (copied <= 0) return '';
+      return buffer.toDartString();
+    } finally {
+      free(buffer);
+    }
+  }
+
+  String _readWindowClassName(HWND hwnd) {
+    final buffer = wsalloc(256);
+    try {
+      final copied = GetClassName(hwnd, buffer, 256).value;
+      if (copied <= 0) return '';
+      return buffer.toDartString();
+    } finally {
+      free(buffer);
+    }
+  }
+
+  Future<void> _sendWindowsPaste(String text, {bool sendEnter = false}) async {
+    final previousClipboard = await Clipboard.getData(Clipboard.kTextPlain);
+    final previousText = previousClipboard?.text;
+
+    _clipboardWatchEnabled = false;
+    try {
+      await Clipboard.setData(ClipboardData(text: text));
+      _lastClipboardSeen = text;
+      _lastClipboardSeq = GetClipboardSequenceNumber();
+
+      await Future.delayed(const Duration(milliseconds: 120));
+      _sendWindowsKeyChord(VK_CONTROL, const VIRTUAL_KEY(0x56));
+
+      if (sendEnter) {
+        await Future.delayed(const Duration(milliseconds: 80));
+        _sendWindowsVirtualKey(VK_RETURN);
+      }
+
+      if (previousText != null &&
+          previousText.isNotEmpty &&
+          previousText != text) {
+        await Future.delayed(const Duration(milliseconds: 350));
+        await Clipboard.setData(ClipboardData(text: previousText));
+        _lastClipboardSeen = previousText;
+        _lastClipboardSeq = GetClipboardSequenceNumber();
+      }
+    } finally {
+      await Future.delayed(const Duration(milliseconds: 120));
+      _clipboardWatchEnabled = true;
+    }
+  }
+
+  void _sendWindowsKeyChord(VIRTUAL_KEY modifierVk, VIRTUAL_KEY keyVk) {
+    final inputs = calloc<INPUT>(4);
+    try {
+      var i = 0;
+
+      final modifierDown = (inputs + i).ref;
+      modifierDown.type = INPUT_KEYBOARD;
+      modifierDown.ki.wVk = modifierVk;
+      modifierDown.ki.wScan = 0;
+      modifierDown.ki.dwFlags = const KEYBD_EVENT_FLAGS(0);
+      i++;
+
+      final keyDown = (inputs + i).ref;
+      keyDown.type = INPUT_KEYBOARD;
+      keyDown.ki.wVk = keyVk;
+      keyDown.ki.wScan = 0;
+      keyDown.ki.dwFlags = const KEYBD_EVENT_FLAGS(0);
+      i++;
+
+      final keyUp = (inputs + i).ref;
+      keyUp.type = INPUT_KEYBOARD;
+      keyUp.ki.wVk = keyVk;
+      keyUp.ki.wScan = 0;
+      keyUp.ki.dwFlags = KEYEVENTF_KEYUP;
+      i++;
+
+      final modifierUp = (inputs + i).ref;
+      modifierUp.type = INPUT_KEYBOARD;
+      modifierUp.ki.wVk = modifierVk;
+      modifierUp.ki.wScan = 0;
+      modifierUp.ki.dwFlags = KEYEVENTF_KEYUP;
+
+      SendInput(4, inputs, ffi.sizeOf<INPUT>());
+    } finally {
+      calloc.free(inputs);
+    }
+  }
+
+  void _sendWindowsVirtualKey(VIRTUAL_KEY vk) {
+    final inputs = calloc<INPUT>(2);
+    try {
+      final down = inputs.ref;
+      down.type = INPUT_KEYBOARD;
+      down.ki.wVk = vk;
+      down.ki.wScan = 0;
+      down.ki.dwFlags = const KEYBD_EVENT_FLAGS(0);
+
+      final up = (inputs + 1).ref;
+      up.type = INPUT_KEYBOARD;
+      up.ki.wVk = vk;
+      up.ki.wScan = 0;
+      up.ki.dwFlags = KEYEVENTF_KEYUP;
+
+      SendInput(2, inputs, ffi.sizeOf<INPUT>());
+    } finally {
+      calloc.free(inputs);
+    }
+  }
+
+  void _sendWindowsUnicodeText(String text, {bool sendEnter = false}) {
+    if (!Platform.isWindows || text.isEmpty) return;
+    final units = text
+        .codeUnits; // UTF-16 code units (matches KEYEVENTF_UNICODE expectation)
+    final extra = sendEnter ? 2 : 0;
+    final totalInputs = units.length * 2 + extra;
+    final inputs = calloc<INPUT>(totalInputs);
+    try {
+      var i = 0;
+      for (final unit in units) {
+        final down = (inputs + i).ref;
+        down.type = INPUT_KEYBOARD;
+        down.ki.wVk = const VIRTUAL_KEY(0);
+        down.ki.wScan = unit;
+        down.ki.dwFlags = KEYEVENTF_UNICODE;
+        i++;
+
+        final up = (inputs + i).ref;
+        up.type = INPUT_KEYBOARD;
+        up.ki.wVk = const VIRTUAL_KEY(0);
+        up.ki.wScan = unit;
+        up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        i++;
+      }
+
+      if (sendEnter) {
+        final down = (inputs + i).ref;
+        down.type = INPUT_KEYBOARD;
+        down.ki.wVk = VK_RETURN;
+        down.ki.wScan = 0;
+        down.ki.dwFlags = const KEYBD_EVENT_FLAGS(0);
+        i++;
+
+        final up = (inputs + i).ref;
+        up.type = INPUT_KEYBOARD;
+        up.ki.wVk = VK_RETURN;
+        up.ki.wScan = 0;
+        up.ki.dwFlags = KEYEVENTF_KEYUP;
+        i++;
+      }
+
+      SendInput(totalInputs, inputs, ffi.sizeOf<INPUT>());
+    } finally {
+      calloc.free(inputs);
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _getVersion();
+    _loadWindowsInputMode();
     _initUuid();
     if (Platform.isWindows) {
       windowManager.addListener(this);
       trayManager.addListener(this);
       // Inizializza la tray e abilita preventClose solo se disponibile
-      unawaited(_initSystemTray().then((_) async {
-        if (_trayInitialized) {
-          await windowManager.setPreventClose(true);
-        } else {
-          await windowManager.setPreventClose(false);
-        }
-      }));
+      unawaited(
+        _initSystemTray().then((_) async {
+          if (_trayInitialized) {
+            await windowManager.setPreventClose(true);
+          } else {
+            await windowManager.setPreventClose(false);
+          }
+        }),
+      );
     }
     _startClipboardWatcher();
   }
@@ -460,7 +763,9 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
   }
 
   void _startClipboardWatcher() {
-    if (!Platform.isWindows) return; // abilita solo su Windows (modifica se vuoi)
+    if (!Platform.isWindows) {
+      return; // abilita solo su Windows (modifica se vuoi)
+    }
     _clipboardTimer?.cancel();
     _clipboardTimer = Timer.periodic(const Duration(milliseconds: 1000), (_) {
       if (!_clipboardWatchEnabled) return;
@@ -473,158 +778,54 @@ class _ReverseHomePageState extends State<ReverseHomePage> with WindowListener, 
     _clipboardTimer = null;
   }
 
-  String _digitsOnly(String s) {
-    final sb = StringBuffer();
-    for (final cu in s.codeUnits) {
-      if (cu >= 0x30 && cu <= 0x39) { // '0'..'9'
-        sb.writeCharCode(cu);
-      }
-    }
-    return sb.toString();
-  }
-
   Future<void> _checkClipboardForCode() async {
     try {
+      int? seq;
+      if (Platform.isWindows) {
+        seq = GetClipboardSequenceNumber();
+      }
       final data = await Clipboard.getData(Clipboard.kTextPlain);
       final text = data?.text ?? '';
-      if (text.isEmpty || text == _lastClipboardSeen) return;
+      if (text.isEmpty) return;
+      if (text == _lastClipboardSeen &&
+          (seq == null || seq == _lastClipboardSeq)) {
+        return;
+      }
       // Strict: accetta solo se la clipboard contiene ESATTAMENTE 6 cifre (nessun separatore)
       _lastClipboardSeen = text;
+      _lastClipboardSeq = seq;
       final t = text.trim();
-      if (t.length != 6) return;
-      bool allDigits = true;
-      for (final cu in t.codeUnits) {
-        if (cu < 0x30 || cu > 0x39) { // '0'..'9'
-          allDigits = false;
-          break;
-        }
+      String? code;
+
+      final hashMatch = RegExp(r'^#(\d{6})#$').firstMatch(t);
+      if (hashMatch != null) {
+        code = hashMatch.group(1);
       }
-      if (!allDigits) return; // es. "20-12-12" non viene accettato
-      final value = int.tryParse(t);
-      if (value == null || value < kClipboardCodeMin || value > kClipboardCodeMax) return;
+
+      if (code == null) return;
+      final value = int.tryParse(code);
+      if (value == null ||
+          value < kClipboardCodeMin ||
+          value > kClipboardCodeMax) {
+        return;
+      }
       if (!mounted) return;
       final hasFocus = FocusScope.of(context).hasFocus;
       final userTyping = hasFocus && _controller.text.isNotEmpty;
       if (userTyping) return;
-      _controller.text = t;
+      _controller.text = code;
       _autoSubmitted = false;
       _controller.selection = const TextSelection.collapsed(offset: 6);
-      _handleTextChanged(t);
+      _handleTextChanged(code);
       return;
 
       // cerca esattamente 6 cifre isolate
       // ignore: unused_local_variable
-      
-      
     } catch (_) {
       // ignora errori clipboard
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: Platform.isWindows
-          ? null
-          : AppBar(title: const Text('Farma authenticator')),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Center(
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Codice generato in alto
-                Text(
-                  _converted,
-                  style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 16),
-                //const Text('Inserisci codice:'),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _controller,
-                  maxLength: 6,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 25, fontWeight: FontWeight.normal),
-                  keyboardType: Platform.isWindows ? TextInputType.none : TextInputType.number,
-                  readOnly: Platform.isWindows ? false : true,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    hintText: 'es: 123456',
-                  ),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(6),
-                  ],
-                  onTap: () {
-                    if (Platform.isWindows) {
-                      SystemChannels.textInput.invokeMethod('TextInput.hide');
-                    }
-                  },
-                  onChanged: _handleTextChanged,
-                ),
-                if (!Platform.isWindows) ...[
-                  const SizedBox(height: 12),
-                  _NumericKeypad(
-                    onDigit: _appendDigit,
-                    onBackspace: _deleteLast,
-                    onClear: _clearAll,
-                  ),
-                  const SizedBox(height: 8),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                "versione: $_version scadenza: $_datascadenza",
-                style: const TextStyle(
-                  fontSize: 10,
-                  color: Colors.grey,
-                  fontFamily: 'monospace',
-                ),
-                textAlign: TextAlign.center,
-              ),
-              GestureDetector(
-                onTap: _showUuidLens,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Tooltip(
-                      message: _lAppAttiva ? 'App attiva' : 'App non attiva',
-                      child: _StatusLed(on: _lAppAttiva, size: 10),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _generatedUUID,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey,
-                        fontFamily: 'monospace',
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-              ),
-          )],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-// ---- Helpers per la pulsantiera numerica ----
-extension on _ReverseHomePageState {
   void _showUuidLens() {
     if (_generatedUUID.isEmpty) return;
     showDialog(
@@ -656,14 +857,6 @@ extension on _ReverseHomePageState {
     );
   }
 
-  String _extractLastDigits(String s, int n) {
-    final digitsOnly = s.replaceAll(RegExp(r'\D'), '');
-    if (digitsOnly.isEmpty) return '';
-    return digitsOnly.length <= n
-        ? digitsOnly
-        : digitsOnly.substring(digitsOnly.length - n);
-  }
-
   void _handleTextChanged(String value) {
     if (value.length > 6) {
       final truncated = value.substring(0, 6);
@@ -673,7 +866,7 @@ extension on _ReverseHomePageState {
       );
     }
 
-    setState(() {});
+    _setStateIfMounted(() {});
 
     if (_controller.text.length == 6 && !_autoSubmitted) {
       _autoSubmitted = true;
@@ -733,6 +926,148 @@ extension on _ReverseHomePageState {
     _controller.selection = const TextSelection.collapsed(offset: 0);
     _handleTextChanged('');
   }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: Platform.isWindows
+          ? null
+          : AppBar(title: const Text('Farma authenticator')),
+      body: Padding(
+        padding: const EdgeInsets.all(20.0),
+        child: Center(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Codice generato in alto
+                Text(
+                  _converted,
+                  style: const TextStyle(
+                    fontSize: 40,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 16),
+                //const Text('Inserisci codice:'),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _controller,
+                  maxLength: 6,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 25, fontWeight: FontWeight.normal),
+                  keyboardType: Platform.isWindows
+                      ? TextInputType.none
+                      : TextInputType.number,
+                  readOnly: Platform.isWindows ? false : true,
+                  decoration: const InputDecoration(
+                    border: OutlineInputBorder(),
+                    hintText: 'es: 123456',
+                  ),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(6),
+                  ],
+                  onTap: () {
+                    if (Platform.isWindows) {
+                      SystemChannels.textInput.invokeMethod('TextInput.hide');
+                    }
+                  },
+                  onChanged: _handleTextChanged,
+                ),
+                if (Platform.isWindows) ...[
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Invio codice verso il programma in uso',
+                    style: TextStyle(fontSize: 12, color: Colors.grey),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    alignment: WrapAlignment.center,
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: [
+                      for (final mode in WindowsInputMode.values)
+                        ChoiceChip(
+                          label: Text(
+                            mode.shortLabel,
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                          selected: _windowsInputMode == mode,
+                          onSelected: (_) {
+                            unawaited(_setWindowsInputMode(mode));
+                          },
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    _windowsInputMode == WindowsInputMode.clipboardPaste
+                        ? 'Per Supremo usa Incolla: copia il codice e invia Ctrl+V + Invio.'
+                        : 'Auto prova a rilevare finestre remote note come Supremo.',
+                    style: const TextStyle(fontSize: 11, color: Colors.grey),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+                if (!Platform.isWindows) ...[
+                  const SizedBox(height: 12),
+                  _NumericKeypad(
+                    onDigit: _appendDigit,
+                    onBackspace: _deleteLast,
+                    onClear: _clearAll,
+                  ),
+                  const SizedBox(height: 8),
+                ],
+              ],
+            ),
+          ),
+        ),
+      ),
+      bottomNavigationBar: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(8.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                "versione: $_version scadenza: $_datascadenza",
+                style: const TextStyle(
+                  fontSize: 10,
+                  color: Colors.grey,
+                  fontFamily: 'monospace',
+                ),
+                textAlign: TextAlign.center,
+              ),
+              GestureDetector(
+                onTap: _showUuidLens,
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Tooltip(
+                      message: _lAppAttiva ? 'App attiva' : 'App non attiva',
+                      child: _StatusLed(on: _lAppAttiva, size: 10),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      _generatedUUID,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        color: Colors.grey,
+                        fontFamily: 'monospace',
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class _NumericKeypad extends StatelessWidget {
@@ -791,7 +1126,7 @@ class _NumericKeypad extends StatelessWidget {
               message: 'Azzera',
               child: ElevatedButton(
                 onPressed: onClear,
-                child: const Icon(Icons.cancel, size: 25, color: Colors.red ),
+                child: const Icon(Icons.cancel, size: 25, color: Colors.red),
               ),
             ),
           ],
@@ -819,7 +1154,7 @@ class _StatusLed extends StatelessWidget {
         border: Border.all(color: Colors.black26, width: 1),
         boxShadow: [
           BoxShadow(
-            color: color.withOpacity(0.5),
+            color: color.withValues(alpha: 0.5),
             blurRadius: 4,
             spreadRadius: 0,
           ),
@@ -828,5 +1163,3 @@ class _StatusLed extends StatelessWidget {
     );
   }
 }
-
-
