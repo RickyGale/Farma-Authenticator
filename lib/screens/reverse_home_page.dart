@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:ffi' as ffi;
 import 'dart:io';
 
+import 'package:camera/camera.dart';
 import 'package:ffi/ffi.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:intl/intl.dart';
 import 'package:local_notifier/local_notifier.dart';
 import 'package:package_info_plus/package_info_plus.dart';
@@ -17,6 +19,7 @@ import '../config/app_config.dart';
 import '../services/activation_service.dart';
 import '../services/code_generator.dart';
 import '../services/device_identity_service.dart';
+import '../services/ocr_code_extractor.dart';
 import '../widgets/numeric_keypad.dart';
 import '../widgets/status_led.dart';
 
@@ -28,10 +31,13 @@ class ReverseHomePage extends StatefulWidget {
 }
 
 class _ReverseHomePageState extends State<ReverseHomePage>
-    with WindowListener, TrayListener {
+    with WindowListener, TrayListener, WidgetsBindingObserver {
   final CodeGenerator _codeGenerator = CodeGenerator();
   final ActivationService _activationService = ActivationService();
   final DeviceIdentityService _deviceIdentityService = DeviceIdentityService();
+  final TextRecognizer _textRecognizer = TextRecognizer(
+    script: TextRecognitionScript.latin,
+  );
   final TextEditingController _controller = TextEditingController();
   //final FlutterTts _tts = FlutterTts();
   String _generatedUUID = '';
@@ -42,6 +48,12 @@ class _ReverseHomePageState extends State<ReverseHomePage>
   String _datascadenza = "";
   String _version = "";
   bool _trayInitialized = false;
+  CameraController? _cameraController;
+  Future<void>? _cameraRelease;
+  bool _cameraRequested = false;
+  bool _cameraInitializing = false;
+  bool _isReadingFrame = false;
+  String? _cameraError;
   // Clipboard watcher
   Timer? _clipboardTimer;
   String? _lastClipboardSeen;
@@ -304,6 +316,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _getVersion();
     _initUuid();
     if (Platform.isWindows) {
@@ -325,6 +338,9 @@ class _ReverseHomePageState extends State<ReverseHomePage>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    unawaited(_cameraController?.dispose());
+    unawaited(_textRecognizer.close());
     if (Platform.isWindows) {
       windowManager.removeListener(this);
       trayManager.removeListener(this);
@@ -335,6 +351,26 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     _stopClipboardWatcher();
     _controller.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!Platform.isAndroid && !Platform.isIOS) return;
+    if (state == AppLifecycleState.inactive) {
+      final controller = _cameraController;
+      if (controller != null) {
+        _setStateIfMounted(() => _cameraController = null);
+        _cameraRelease = _releaseCameraController(controller);
+      }
+    } else if (state == AppLifecycleState.resumed && _cameraRequested) {
+      unawaited(_resumeCameraScanner());
+    }
+  }
+
+  Future<void> _resumeCameraScanner() async {
+    await _cameraRelease;
+    _cameraRelease = null;
+    if (_cameraRequested) await _initializeCamera();
   }
 
   void _startClipboardWatcher() {
@@ -501,6 +537,215 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     _handleTextChanged('');
   }
 
+  Future<void> _openCameraScanner() async {
+    if (_cameraRequested) return;
+    _cameraRequested = true;
+    await _initializeCamera();
+  }
+
+  Future<void> _initializeCamera() async {
+    if (_cameraInitializing || !_cameraRequested) return;
+    _setStateIfMounted(() {
+      _cameraInitializing = true;
+      _cameraError = null;
+    });
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        throw CameraException('NoCamera', 'Nessuna fotocamera disponibile');
+      }
+      final camera =
+          cameras
+              .where((item) => item.lensDirection == CameraLensDirection.back)
+              .firstOrNull ??
+          cameras.first;
+      final controller = CameraController(
+        camera,
+        ResolutionPreset.medium,
+        enableAudio: false,
+        fps: 20,
+        imageFormatGroup: Platform.isAndroid
+            ? ImageFormatGroup.nv21
+            : ImageFormatGroup.bgra8888,
+      );
+      await controller.initialize();
+      if (!_cameraRequested || !mounted) {
+        await controller.dispose();
+        return;
+      }
+      _cameraController = controller;
+      await controller.startImageStream(
+        (image) => unawaited(_readCameraFrame(image, camera)),
+      );
+    } on CameraException catch (error) {
+      _cameraRequested = false;
+      _cameraError = switch (error.code) {
+        'CameraAccessDenied' || 'CameraAccessDeniedWithoutPrompt' =>
+          'Consenti l’accesso alla fotocamera per leggere il codice.',
+        'CameraAccessRestricted' =>
+          'L’accesso alla fotocamera è bloccato nelle impostazioni del dispositivo.',
+        _ => 'Impossibile avviare la fotocamera. Riprova.',
+      };
+    } finally {
+      _setStateIfMounted(() => _cameraInitializing = false);
+    }
+  }
+
+  Future<void> _readCameraFrame(
+    CameraImage image,
+    CameraDescription camera,
+  ) async {
+    if (!_cameraRequested || _isReadingFrame || image.planes.length != 1) {
+      return;
+    }
+    final format = InputImageFormatValue.fromRawValue(image.format.raw);
+    final rotation = InputImageRotationValue.fromRawValue(
+      camera.sensorOrientation,
+    );
+    if (format == null || rotation == null) return;
+    _isReadingFrame = true;
+    try {
+      final inputImage = InputImage.fromBytes(
+        bytes: image.planes.first.bytes,
+        metadata: InputImageMetadata(
+          size: Size(image.width.toDouble(), image.height.toDouble()),
+          rotation: rotation,
+          format: format,
+          bytesPerRow: image.planes.first.bytesPerRow,
+        ),
+      );
+      final recognizedText = await _textRecognizer.processImage(inputImage);
+      final code = OcrCodeExtractor.extract(recognizedText.text);
+      if (!mounted || code == null) return;
+      await _closeCameraScanner();
+      _controller.text = code;
+      _controller.selection = const TextSelection.collapsed(offset: 6);
+      _autoSubmitted = false;
+      _handleTextChanged(code);
+    } on PlatformException {
+      // Un frame può fallire mentre la camera cambia stato: il ciclo riprova.
+    } finally {
+      _isReadingFrame = false;
+    }
+  }
+
+  Future<void> _closeCameraScanner() async {
+    _cameraRequested = false;
+    final controller = _cameraController;
+    _setStateIfMounted(() => _cameraController = null);
+    if (controller != null) {
+      _cameraRelease = _releaseCameraController(controller);
+      await _cameraRelease;
+      _cameraRelease = null;
+    }
+  }
+
+  Future<void> _releaseCameraController(CameraController controller) async {
+    if (controller.value.isStreamingImages) await controller.stopImageStream();
+    if (mounted) await WidgetsBinding.instance.endOfFrame;
+    await controller.dispose();
+  }
+
+  Widget _buildCameraScanner() {
+    final controller = _cameraController;
+    if (_cameraRequested ||
+        (controller != null && controller.value.isInitialized)) {
+      return ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 260),
+        child: AspectRatio(
+          aspectRatio: 1,
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(16),
+            child: ColoredBox(
+              color: Colors.black,
+              child: controller == null || !controller.value.isInitialized
+                  ? const Center(child: CircularProgressIndicator())
+                  : Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        LayoutBuilder(
+                          builder: (context, constraints) {
+                            var scale =
+                                constraints.maxWidth /
+                                constraints.maxHeight *
+                                controller.value.aspectRatio;
+                            if (scale < 1) scale = 1 / scale;
+                            return Transform.scale(
+                              scale: scale,
+                              child: Center(child: CameraPreview(controller)),
+                            );
+                          },
+                        ),
+                        IgnorePointer(
+                          child: Center(
+                            child: Container(
+                              width: 190,
+                              height: 86,
+                              decoration: BoxDecoration(
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 2,
+                                ),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          top: 6,
+                          right: 6,
+                          child: IconButton.filled(
+                            onPressed: _closeCameraScanner,
+                            tooltip: 'Chiudi fotocamera',
+                            icon: const Icon(Icons.close),
+                          ),
+                        ),
+                        const Positioned(
+                          left: 12,
+                          right: 12,
+                          bottom: 12,
+                          child: Text(
+                            'Inquadra il codice nel riquadro',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                              shadows: [Shadow(blurRadius: 6)],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+            ),
+          ),
+        ),
+      );
+    }
+    return Column(
+      children: [
+        SizedBox(
+          width: double.infinity,
+          child: FilledButton.icon(
+            onPressed: _cameraInitializing ? null : _openCameraScanner,
+            icon: const Icon(Icons.document_scanner_outlined),
+            label: const Text('Inquadra il codice'),
+          ),
+        ),
+        if (_cameraError != null) ...[
+          const SizedBox(height: 8),
+          Semantics(
+            liveRegion: true,
+            child: Text(
+              _cameraError!,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -560,6 +805,10 @@ class _ReverseHomePageState extends State<ReverseHomePage>
                 ],
                 if (!Platform.isWindows) ...[
                   const SizedBox(height: 12),
+                  if (Platform.isAndroid || Platform.isIOS) ...[
+                    _buildCameraScanner(),
+                    const SizedBox(height: 12),
+                  ],
                   NumericKeypad(
                     onDigit: _appendDigit,
                     onBackspace: _deleteLast,
