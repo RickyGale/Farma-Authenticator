@@ -347,6 +347,11 @@ class _ReverseHomePageState extends State<ReverseHomePage>
       );
     }
     _startClipboardWatcher();
+    if (Platform.isAndroid || Platform.isIOS) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) unawaited(_openCameraScanner());
+      });
+    }
   }
 
   @override
