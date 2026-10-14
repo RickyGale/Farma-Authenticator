@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ffi' as ffi;
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:ffi/ffi.dart';
@@ -33,6 +34,9 @@ class ReverseHomePage extends StatefulWidget {
 
 class _ReverseHomePageState extends State<ReverseHomePage>
     with WindowListener, TrayListener, WidgetsBindingObserver {
+  static const double _scannerSize = 260;
+  static const double _scanBoxWidth = 190;
+  static const double _scanBoxHeight = 86;
   static const _deviceOrientations = <DeviceOrientation, int>{
     DeviceOrientation.portraitUp: 0,
     DeviceOrientation.landscapeLeft: 90,
@@ -62,6 +66,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
   bool _isReadingFrame = false;
   String? _cameraError;
   String _cameraDebug = 'Camera non ancora avviata';
+  String _cameraCropDebug = '';
   // Clipboard watcher
   Timer? _clipboardTimer;
   String? _lastClipboardSeen;
@@ -651,7 +656,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
               '${plane.bytes.length}b row:${plane.bytesPerRow} px:${plane.bytesPerPixel}',
         )
         .join(' / ');
-    return 'FRAME ${image.width}x${image.height}\nformat ${image.format.group} raw:${image.format.raw} | piani ${image.planes.length}\n$planes\nsensore ${camera.sensorOrientation}° | device ${controller?.value.deviceOrientation} | OCR rot ${rotation?.rawValue}°';
+    return 'FRAME ${image.width}x${image.height}\nformat ${image.format.group} raw:${image.format.raw} | piani ${image.planes.length}\n$planes\nsensore ${camera.sensorOrientation}° | device ${controller?.value.deviceOrientation} | OCR rot ${rotation?.rawValue}°\n$_cameraCropDebug';
   }
 
   void _setCameraDebug(String value) {
@@ -675,14 +680,15 @@ class _ReverseHomePageState extends State<ReverseHomePage>
       if (format != InputImageFormat.bgra8888 || image.planes.length != 1) {
         return null;
       }
-      final plane = image.planes.first;
+      final cropped = _cropBgra8888(image, rotation);
+      if (cropped == null) return null;
       return InputImage.fromBytes(
-        bytes: plane.bytes,
+        bytes: cropped.bytes,
         metadata: InputImageMetadata(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
+          size: Size(cropped.width.toDouble(), cropped.height.toDouble()),
           rotation: rotation,
           format: format!,
-          bytesPerRow: plane.bytesPerRow,
+          bytesPerRow: cropped.bytesPerRow,
         ),
       );
     }
@@ -691,16 +697,103 @@ class _ReverseHomePageState extends State<ReverseHomePage>
         ? image.planes.first.bytes
         : _yuv420ToNv21(image);
     if (bytes == null) return null;
+    final cropped = _cropNv21(bytes, image.width, image.height, rotation);
+    if (cropped == null) return null;
     return InputImage.fromBytes(
-      bytes: bytes,
+      bytes: cropped.bytes,
       metadata: InputImageMetadata(
-        size: Size(image.width.toDouble(), image.height.toDouble()),
+        size: Size(cropped.width.toDouble(), cropped.height.toDouble()),
         rotation: rotation,
         format: InputImageFormat.nv21,
-        bytesPerRow: image.width,
+        bytesPerRow: cropped.bytesPerRow,
       ),
     );
   }
+
+  _CroppedCameraImage? _cropNv21(
+    Uint8List bytes,
+    int width,
+    int height,
+    InputImageRotation rotation,
+  ) {
+    final crop = _scanCropRect(width, height, rotation);
+    if (bytes.length < width * height * 3 ~/ 2 ||
+        crop.width < 2 ||
+        crop.height < 2) {
+      return null;
+    }
+    final output = Uint8List(crop.width * crop.height * 3 ~/ 2);
+    var offset = 0;
+    for (var row = 0; row < crop.height; row++) {
+      final start = (crop.top + row) * width + crop.left;
+      output.setRange(offset, offset + crop.width, bytes, start);
+      offset += crop.width;
+    }
+    final chromaStart = width * height;
+    for (var row = 0; row < crop.height ~/ 2; row++) {
+      final start = chromaStart + (crop.top ~/ 2 + row) * width + crop.left;
+      output.setRange(offset, offset + crop.width, bytes, start);
+      offset += crop.width;
+    }
+    _cameraCropDebug =
+        'crop ${crop.width}x${crop.height} @ ${crop.left},${crop.top}';
+    return _CroppedCameraImage(output, crop.width, crop.height, crop.width);
+  }
+
+  _CroppedCameraImage? _cropBgra8888(
+    CameraImage image,
+    InputImageRotation rotation,
+  ) {
+    final plane = image.planes.first;
+    final pixelStride = plane.bytesPerPixel ?? 4;
+    if (pixelStride != 4) return null;
+    final crop = _scanCropRect(image.width, image.height, rotation);
+    if (crop.width < 1 || crop.height < 1) return null;
+    final outputRowBytes = crop.width * pixelStride;
+    final output = Uint8List(outputRowBytes * crop.height);
+    for (var row = 0; row < crop.height; row++) {
+      final sourceStart =
+          (crop.top + row) * plane.bytesPerRow + crop.left * pixelStride;
+      output.setRange(
+        row * outputRowBytes,
+        (row + 1) * outputRowBytes,
+        plane.bytes,
+        sourceStart,
+      );
+    }
+    _cameraCropDebug =
+        'crop ${crop.width}x${crop.height} @ ${crop.left},${crop.top}';
+    return _CroppedCameraImage(output, crop.width, crop.height, outputRowBytes);
+  }
+
+  ({int left, int top, int width, int height}) _scanCropRect(
+    int frameWidth,
+    int frameHeight,
+    InputImageRotation rotation,
+  ) {
+    final quarterTurn =
+        rotation == InputImageRotation.rotation90deg ||
+        rotation == InputImageRotation.rotation270deg;
+    final rotatedWidth = quarterTurn ? frameHeight : frameWidth;
+    final rotatedHeight = quarterTurn ? frameWidth : frameHeight;
+    final visibleSquare = math.min(rotatedWidth, rotatedHeight);
+    final rotatedCropWidth = _evenFloor(
+      visibleSquare * _scanBoxWidth / _scannerSize,
+    );
+    final rotatedCropHeight = _evenFloor(
+      visibleSquare * _scanBoxHeight / _scannerSize,
+    );
+    final cropWidth = quarterTurn ? rotatedCropHeight : rotatedCropWidth;
+    final cropHeight = quarterTurn ? rotatedCropWidth : rotatedCropHeight;
+    return (
+      left: _evenFloor((frameWidth - cropWidth) / 2),
+      top: _evenFloor((frameHeight - cropHeight) / 2),
+      width: cropWidth,
+      height: cropHeight,
+    );
+  }
+
+  int _evenFloor(num value) => value.floor() & ~1;
 
   InputImageRotation? _androidInputRotation(
     CameraDescription camera,
@@ -765,7 +858,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     if (_cameraRequested ||
         (controller != null && controller.value.isInitialized)) {
       final preview = ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 260),
+        constraints: const BoxConstraints(maxWidth: _scannerSize),
         child: AspectRatio(
           aspectRatio: 1,
           child: ClipRRect(
@@ -793,8 +886,8 @@ class _ReverseHomePageState extends State<ReverseHomePage>
                         IgnorePointer(
                           child: Center(
                             child: Container(
-                              width: 190,
-                              height: 86,
+                              width: _scanBoxWidth,
+                              height: _scanBoxHeight,
                               decoration: BoxDecoration(
                                 border: Border.all(
                                   color: Colors.white,
@@ -1005,4 +1098,18 @@ class _ReverseHomePageState extends State<ReverseHomePage>
       ),
     );
   }
+}
+
+class _CroppedCameraImage {
+  const _CroppedCameraImage(
+    this.bytes,
+    this.width,
+    this.height,
+    this.bytesPerRow,
+  );
+
+  final Uint8List bytes;
+  final int width;
+  final int height;
+  final int bytesPerRow;
 }

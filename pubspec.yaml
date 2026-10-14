@@ -1,7 +1,7 @@
 name: farma_auth
 description: "Internal use app for Farmaconsult employees to authenticate themself."
 publish_to: 'none'
-version: 1.13.05+7
+version: 1.13.06+8
 
 environment:
   sdk: ^3.8.1
