@@ -21,5 +21,10 @@ void main() {
     test('accetta ripetizioni dello stesso codice', () {
       expect(OcrCodeExtractor.extract('123456\n123456'), '123456');
     });
+
+    test('ricompone cifre separate da spazi o righe', () {
+      expect(OcrCodeExtractor.extract('Codice: 123 456'), '123456');
+      expect(OcrCodeExtractor.extract('1 2 3\n4 5 6'), '123456');
+    });
   });
 }

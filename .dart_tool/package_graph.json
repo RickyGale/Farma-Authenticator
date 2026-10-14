@@ -5,7 +5,7 @@
   "packages": [
     {
       "name": "farma_auth",
-      "version": "1.13.01+3",
+      "version": "1.13.05+7",
       "dependencies": [
         "android_id",
         "camera",

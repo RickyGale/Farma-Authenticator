@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:camera/camera.dart';
 import 'package:ffi/ffi.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
@@ -32,6 +33,12 @@ class ReverseHomePage extends StatefulWidget {
 
 class _ReverseHomePageState extends State<ReverseHomePage>
     with WindowListener, TrayListener, WidgetsBindingObserver {
+  static const _deviceOrientations = <DeviceOrientation, int>{
+    DeviceOrientation.portraitUp: 0,
+    DeviceOrientation.landscapeLeft: 90,
+    DeviceOrientation.portraitDown: 180,
+    DeviceOrientation.landscapeRight: 270,
+  };
   final CodeGenerator _codeGenerator = CodeGenerator();
   final ActivationService _activationService = ActivationService();
   final DeviceIdentityService _deviceIdentityService = DeviceIdentityService();
@@ -54,6 +61,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
   bool _cameraInitializing = false;
   bool _isReadingFrame = false;
   String? _cameraError;
+  String _cameraDebug = 'Camera non ancora avviata';
   // Clipboard watcher
   Timer? _clipboardTimer;
   String? _lastClipboardSeen;
@@ -561,9 +569,9 @@ class _ReverseHomePageState extends State<ReverseHomePage>
           cameras.first;
       final controller = CameraController(
         camera,
-        ResolutionPreset.medium,
+        ResolutionPreset.high,
         enableAudio: false,
-        fps: 20,
+        fps: 15,
         imageFormatGroup: Platform.isAndroid
             ? ImageFormatGroup.nv21
             : ImageFormatGroup.bgra8888,
@@ -574,10 +582,16 @@ class _ReverseHomePageState extends State<ReverseHomePage>
         return;
       }
       _cameraController = controller;
+      _setCameraDebug(
+        'CAMERA OK\n${camera.name} | sensore ${camera.sensorOrientation}°\npreview ${controller.value.previewSize} | aspect ${controller.value.aspectRatio.toStringAsFixed(3)}',
+      );
       await controller.startImageStream(
         (image) => unawaited(_readCameraFrame(image, camera)),
       );
     } on CameraException catch (error) {
+      _setCameraDebug(
+        'CAMERA ERROR\n${error.code}\n${error.description ?? ''}',
+      );
       _cameraRequested = false;
       _cameraError = switch (error.code) {
         'CameraAccessDenied' || 'CameraAccessDeniedWithoutPrompt' =>
@@ -595,26 +609,19 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     CameraImage image,
     CameraDescription camera,
   ) async {
-    if (!_cameraRequested || _isReadingFrame || image.planes.length != 1) {
+    if (!_cameraRequested || _isReadingFrame) return;
+    final inputImage = _inputImageFromCameraImage(image, camera);
+    if (inputImage == null) {
+      _setCameraDebug('${_frameDebugInfo(image, camera)}\nINPUT SCARTATO');
       return;
     }
-    final format = InputImageFormatValue.fromRawValue(image.format.raw);
-    final rotation = InputImageRotationValue.fromRawValue(
-      camera.sensorOrientation,
-    );
-    if (format == null || rotation == null) return;
     _isReadingFrame = true;
     try {
-      final inputImage = InputImage.fromBytes(
-        bytes: image.planes.first.bytes,
-        metadata: InputImageMetadata(
-          size: Size(image.width.toDouble(), image.height.toDouble()),
-          rotation: rotation,
-          format: format,
-          bytesPerRow: image.planes.first.bytesPerRow,
-        ),
-      );
       final recognizedText = await _textRecognizer.processImage(inputImage);
+      final ocrText = recognizedText.text.trim().replaceAll('\n', ' | ');
+      _setCameraDebug(
+        '${_frameDebugInfo(image, camera)}\nOCR: ${ocrText.isEmpty ? '(vuoto)' : ocrText}',
+      );
       final code = OcrCodeExtractor.extract(recognizedText.text);
       if (!mounted || code == null) return;
       await _closeCameraScanner();
@@ -622,11 +629,118 @@ class _ReverseHomePageState extends State<ReverseHomePage>
       _controller.selection = const TextSelection.collapsed(offset: 6);
       _autoSubmitted = false;
       _handleTextChanged(code);
-    } on PlatformException {
-      // Un frame può fallire mentre la camera cambia stato: il ciclo riprova.
+    } on PlatformException catch (error) {
+      _setCameraDebug(
+        '${_frameDebugInfo(image, camera)}\nOCR ERROR: ${error.code}\n${error.message ?? ''}',
+      );
+    } catch (error) {
+      _setCameraDebug('${_frameDebugInfo(image, camera)}\nFRAME ERROR: $error');
     } finally {
       _isReadingFrame = false;
     }
+  }
+
+  String _frameDebugInfo(CameraImage image, CameraDescription camera) {
+    final controller = _cameraController;
+    final rotation = controller == null
+        ? null
+        : _androidInputRotation(camera, controller.value.deviceOrientation);
+    final planes = image.planes
+        .map(
+          (plane) =>
+              '${plane.bytes.length}b row:${plane.bytesPerRow} px:${plane.bytesPerPixel}',
+        )
+        .join(' / ');
+    return 'FRAME ${image.width}x${image.height}\nformat ${image.format.group} raw:${image.format.raw} | piani ${image.planes.length}\n$planes\nsensore ${camera.sensorOrientation}° | device ${controller?.value.deviceOrientation} | OCR rot ${rotation?.rawValue}°';
+  }
+
+  void _setCameraDebug(String value) {
+    if (!kDebugMode || value == _cameraDebug) return;
+    _setStateIfMounted(() => _cameraDebug = value);
+  }
+
+  InputImage? _inputImageFromCameraImage(
+    CameraImage image,
+    CameraDescription camera,
+  ) {
+    final controller = _cameraController;
+    if (controller == null) return null;
+    final rotation = Platform.isIOS
+        ? InputImageRotationValue.fromRawValue(camera.sensorOrientation)
+        : _androidInputRotation(camera, controller.value.deviceOrientation);
+    if (rotation == null) return null;
+
+    if (Platform.isIOS) {
+      final format = InputImageFormatValue.fromRawValue(image.format.raw);
+      if (format != InputImageFormat.bgra8888 || image.planes.length != 1) {
+        return null;
+      }
+      final plane = image.planes.first;
+      return InputImage.fromBytes(
+        bytes: plane.bytes,
+        metadata: InputImageMetadata(
+          size: Size(image.width.toDouble(), image.height.toDouble()),
+          rotation: rotation,
+          format: format!,
+          bytesPerRow: plane.bytesPerRow,
+        ),
+      );
+    }
+
+    final bytes = image.planes.length == 1
+        ? image.planes.first.bytes
+        : _yuv420ToNv21(image);
+    if (bytes == null) return null;
+    return InputImage.fromBytes(
+      bytes: bytes,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: rotation,
+        format: InputImageFormat.nv21,
+        bytesPerRow: image.width,
+      ),
+    );
+  }
+
+  InputImageRotation? _androidInputRotation(
+    CameraDescription camera,
+    DeviceOrientation orientation,
+  ) {
+    final compensation = _deviceOrientations[orientation];
+    if (compensation == null) return null;
+    final degrees = camera.lensDirection == CameraLensDirection.front
+        ? (camera.sensorOrientation + compensation) % 360
+        : (camera.sensorOrientation - compensation + 360) % 360;
+    return InputImageRotationValue.fromRawValue(degrees);
+  }
+
+  Uint8List? _yuv420ToNv21(CameraImage image) {
+    if (image.planes.length != 3) return null;
+    final width = image.width;
+    final height = image.height;
+    final output = Uint8List(width * height + width * height ~/ 2);
+    final yPlane = image.planes[0];
+    final uPlane = image.planes[1];
+    final vPlane = image.planes[2];
+    var offset = 0;
+    for (var row = 0; row < height; row++) {
+      for (var column = 0; column < width; column++) {
+        output[offset++] =
+            yPlane.bytes[row * yPlane.bytesPerRow +
+                column * (yPlane.bytesPerPixel ?? 1)];
+      }
+    }
+    for (var row = 0; row < height ~/ 2; row++) {
+      for (var column = 0; column < width ~/ 2; column++) {
+        final uIndex =
+            row * uPlane.bytesPerRow + column * (uPlane.bytesPerPixel ?? 1);
+        final vIndex =
+            row * vPlane.bytesPerRow + column * (vPlane.bytesPerPixel ?? 1);
+        output[offset++] = vPlane.bytes[vIndex];
+        output[offset++] = uPlane.bytes[uIndex];
+      }
+    }
+    return output;
   }
 
   Future<void> _closeCameraScanner() async {
@@ -650,7 +764,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     final controller = _cameraController;
     if (_cameraRequested ||
         (controller != null && controller.value.isInitialized)) {
-      return ConstrainedBox(
+      final preview = ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 260),
         child: AspectRatio(
           aspectRatio: 1,
@@ -719,6 +833,33 @@ class _ReverseHomePageState extends State<ReverseHomePage>
             ),
           ),
         ),
+      );
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          preview,
+          if (kDebugMode) ...[
+            const SizedBox(height: 8),
+            Container(
+              width: double.infinity,
+              constraints: const BoxConstraints(maxWidth: 360),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.black87,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: SelectableText(
+                _cameraDebug,
+                style: const TextStyle(
+                  color: Colors.lightGreenAccent,
+                  fontFamily: 'monospace',
+                  fontSize: 11,
+                  height: 1.25,
+                ),
+              ),
+            ),
+          ],
+        ],
       );
     }
     return Column(
