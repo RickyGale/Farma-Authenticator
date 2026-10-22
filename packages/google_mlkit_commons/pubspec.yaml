@@ -1,0 +1,27 @@
+name: google_mlkit_commons
+description: A Flutter plugin with commons files to implement google's standalone ml kit made for mobile platform.
+version: 0.8.1
+homepage: https://github.com/flutter-ml/google_ml_kit_flutter
+repository: https://github.com/flutter-ml/google_ml_kit_flutter/tree/master/packages/google_mlkit_commons
+
+environment:
+  sdk: ">=2.16.0 <4.0.0"
+  flutter: ">=2.5.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+# Copia locale senza la piattaforma iOS: ML Kit non ha slice arm64 per il
+# simulatore, su iOS si usa Apple Vision (vedi ios/Runner/VisionTextRecognizer.swift).
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: com.google_mlkit_commons
+        pluginClass: GoogleMlKitCommonsPlugin

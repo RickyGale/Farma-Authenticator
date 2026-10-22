@@ -38,37 +38,36 @@ class ActivationService {
           )
           .timeout(const Duration(seconds: 8));
       if (response.statusCode == 200) {
-        DateFormat('dd-MM-yy').parse(response.body);
+        final active = _isNotExpired(response.body);
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('DataScadenza', response.body);
         debugPrint('Registrazione ok');
-        return ActivationResult(active: true, expiration: response.body);
+        return ActivationResult(active: active, expiration: response.body);
       }
       debugPrint('Errore server: ${response.statusCode} - ${response.body}');
-      return await _savedActivation(
-        'Errore server: ${response.statusCode}.',
-        includeSameDay: true,
-      );
+      return await _savedActivation('Errore server: ${response.statusCode}.');
     } catch (error) {
       debugPrint('Errore rete: $error');
-      return _savedActivation('Errore rete.', includeSameDay: false);
+      return _savedActivation('Errore rete.');
     }
   }
 
-  Future<ActivationResult> _savedActivation(
-    String errorPrefix, {
-    required bool includeSameDay,
-  }) async {
+  /// Attiva solo se la scadenza è successiva a oggi: il giorno di scadenza
+  /// conta già come non attivo. Lancia [FormatException] se la data non è valida.
+  bool _isNotExpired(String expiration) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    return DateFormat('dd-MM-yy').parse(expiration).isAfter(today);
+  }
+
+  Future<ActivationResult> _savedActivation(String errorPrefix) async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString('DataScadenza');
     final filesPresent = await _windowsRequiredFilesPresent();
     var active = false;
     if (stored != null && stored.isNotEmpty) {
       try {
-        final expiration = DateFormat('dd-MM-yy').parse(stored);
-        active =
-            expiration.isAfter(DateTime.now()) ||
-            (includeSameDay && expiration.isAtSameMomentAs(DateTime.now()));
+        active = _isNotExpired(stored);
       } catch (_) {}
     }
     final expiration = stored ?? '';

@@ -13,6 +13,7 @@
         "device_info_plus",
         "ffi",
         "flutter",
+        "foldable",
         "google_mlkit_text_recognition",
         "http",
         "intl",
@@ -777,6 +778,14 @@
       "dependencies": [
         "meta",
         "path"
+      ]
+    },
+    {
+      "name": "foldable",
+      "version": "1.0.5",
+      "dependencies": [
+        "flutter",
+        "plugin_platform_interface"
       ]
     }
   ],

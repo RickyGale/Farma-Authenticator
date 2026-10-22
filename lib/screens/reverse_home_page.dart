@@ -5,6 +5,7 @@ import 'dart:math' as math;
 
 import 'package:camera/camera.dart';
 import 'package:ffi/ffi.dart';
+import 'package:foldable/foldable.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -22,6 +23,7 @@ import '../services/activation_service.dart';
 import '../services/code_generator.dart';
 import '../services/device_identity_service.dart';
 import '../services/ocr_code_extractor.dart';
+import '../services/vision_text_recognizer.dart';
 import '../widgets/numeric_keypad.dart';
 import '../widgets/status_led.dart';
 
@@ -49,6 +51,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
   final TextRecognizer _textRecognizer = TextRecognizer(
     script: TextRecognitionScript.latin,
   );
+  final VisionTextRecognizer _visionTextRecognizer = VisionTextRecognizer();
   final TextEditingController _controller = TextEditingController();
   //final FlutterTts _tts = FlutterTts();
   String _generatedUUID = '';
@@ -358,7 +361,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     unawaited(_cameraController?.dispose());
-    unawaited(_textRecognizer.close());
+    if (Platform.isAndroid) unawaited(_textRecognizer.close());
     if (Platform.isWindows) {
       windowManager.removeListener(this);
       trayManager.removeListener(this);
@@ -627,12 +630,14 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     }
     _isReadingFrame = true;
     try {
-      final recognizedText = await _textRecognizer.processImage(inputImage);
-      final ocrText = recognizedText.text.trim().replaceAll('\n', ' | ');
+      final recognizedText = Platform.isIOS
+          ? await _visionTextRecognizer.processImage(inputImage)
+          : (await _textRecognizer.processImage(inputImage)).text;
+      final ocrText = recognizedText.trim().replaceAll('\n', ' | ');
       _setCameraDebug(
         '${_frameDebugInfo(image, camera)}\nOCR: ${ocrText.isEmpty ? '(vuoto)' : ocrText}',
       );
-      final code = OcrCodeExtractor.extract(recognizedText.text);
+      final code = OcrCodeExtractor.extract(recognizedText);
       if (!mounted || code == null) return;
       await _closeCameraScanner();
       _controller.text = code;
@@ -985,81 +990,160 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     );
   }
 
+  /// Larghezza minima per affiancare i due pannelli quando iOS non fornisce
+  /// la size class (Android, simulatori/emulatori senza piega).
+  static const double _twoPaneMinWidth = 700;
+  static const double _paneGap = 40;
+  static const double _paneMaxWidth = 440;
+
+  Widget _buildBody(
+    BuildContext context,
+    BoxConstraints constraints,
+    FoldInfo fold,
+  ) {
+    // Affiancati solo in orizzontale: aperto in verticale il tastierino va
+    // sotto, come sul telefono normale.
+    final landscape = constraints.maxWidth > constraints.maxHeight;
+    final twoPanes =
+        !Platform.isWindows &&
+        (fold.spansDivision ||
+            (landscape &&
+                (fold.isRegularWidth ||
+                    constraints.maxWidth >= _twoPaneMinWidth)));
+    if (!twoPanes) {
+      return _buildPane(
+        Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ..._buildEntryChildren(),
+            if (!Platform.isWindows) ...[
+              const SizedBox(height: 12),
+              NumericKeypad(
+                onDigit: _appendDigit,
+                onBackspace: _deleteLast,
+                onClear: _clearAll,
+              ),
+              const SizedBox(height: 8),
+            ],
+          ],
+        ),
+      );
+    }
+
+    final entryPane = _buildPane(
+      Column(mainAxisSize: MainAxisSize.min, children: _buildEntryChildren()),
+    );
+    final keypadPane = _buildPane(
+      NumericKeypad(
+        onDigit: _appendDigit,
+        onBackspace: _deleteLast,
+        onClear: _clearAll,
+      ),
+    );
+
+    // Con iPhone Duo semiaperto la piega è attiva: lo spazio tra i pannelli
+    // coincide con la piega, così nessun controllo resta a cavallo.
+    final division = fold.divisionRect;
+    if (division != null && division.height >= division.width) {
+      return Row(
+        children: [
+          SizedBox(width: division.left, child: entryPane),
+          SizedBox(width: division.width),
+          Expanded(child: keypadPane),
+        ],
+      );
+    }
+    if (division != null) {
+      return Column(
+        children: [
+          SizedBox(height: division.top, child: entryPane),
+          SizedBox(height: division.height),
+          Expanded(child: keypadPane),
+        ],
+      );
+    }
+    // Da aperto la piega non c'è, ma si tiene la stessa divisione a metà
+    // schermo: il layout non salta quando si apre o si chiude la cerniera.
+    return Row(
+      children: [
+        Expanded(child: entryPane),
+        const SizedBox(width: _paneGap),
+        Expanded(child: keypadPane),
+      ],
+    );
+  }
+
+  Widget _buildPane(Widget child) {
+    return Padding(
+      padding: const EdgeInsets.all(20.0),
+      child: Center(
+        child: SingleChildScrollView(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: _paneMaxWidth),
+            child: child,
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _buildEntryChildren() {
+    return [
+      // Codice generato in alto
+      Text(
+        _converted,
+        style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold),
+        textAlign: TextAlign.center,
+      ),
+      const SizedBox(height: 16),
+      //const Text('Inserisci codice:'),
+      const SizedBox(height: 16),
+      TextField(
+        controller: _controller,
+        maxLength: 6,
+        textAlign: TextAlign.center,
+        style: TextStyle(fontSize: 25, fontWeight: FontWeight.normal),
+        keyboardType: Platform.isWindows
+            ? TextInputType.none
+            : TextInputType.number,
+        readOnly: Platform.isWindows ? false : true,
+        decoration: const InputDecoration(
+          border: OutlineInputBorder(),
+          hintText: 'es: 123456',
+        ),
+        inputFormatters: [
+          FilteringTextInputFormatter.digitsOnly,
+          LengthLimitingTextInputFormatter(6),
+        ],
+        onTap: () {
+          if (Platform.isWindows) {
+            SystemChannels.textInput.invokeMethod('TextInput.hide');
+          }
+        },
+        onChanged: _handleTextChanged,
+      ),
+      if (Platform.isWindows) ...[
+        const SizedBox(height: 8),
+        const Text(
+          'Il codice viene digitato nel programma in uso',
+          style: TextStyle(fontSize: 12, color: Colors.grey),
+          textAlign: TextAlign.center,
+        ),
+      ],
+      if (Platform.isAndroid || Platform.isIOS) ...[
+        const SizedBox(height: 12),
+        _buildCameraScanner(),
+      ],
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: Platform.isWindows
           ? null
           : AppBar(title: const Text('Farma authenticator')),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Center(
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                // Codice generato in alto
-                Text(
-                  _converted,
-                  style: const TextStyle(
-                    fontSize: 40,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 16),
-                //const Text('Inserisci codice:'),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: _controller,
-                  maxLength: 6,
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 25, fontWeight: FontWeight.normal),
-                  keyboardType: Platform.isWindows
-                      ? TextInputType.none
-                      : TextInputType.number,
-                  readOnly: Platform.isWindows ? false : true,
-                  decoration: const InputDecoration(
-                    border: OutlineInputBorder(),
-                    hintText: 'es: 123456',
-                  ),
-                  inputFormatters: [
-                    FilteringTextInputFormatter.digitsOnly,
-                    LengthLimitingTextInputFormatter(6),
-                  ],
-                  onTap: () {
-                    if (Platform.isWindows) {
-                      SystemChannels.textInput.invokeMethod('TextInput.hide');
-                    }
-                  },
-                  onChanged: _handleTextChanged,
-                ),
-                if (Platform.isWindows) ...[
-                  const SizedBox(height: 8),
-                  const Text(
-                    'Il codice viene digitato nel programma in uso',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                    textAlign: TextAlign.center,
-                  ),
-                ],
-                if (!Platform.isWindows) ...[
-                  const SizedBox(height: 12),
-                  if (Platform.isAndroid || Platform.isIOS) ...[
-                    _buildCameraScanner(),
-                    const SizedBox(height: 12),
-                  ],
-                  NumericKeypad(
-                    onDigit: _appendDigit,
-                    onBackspace: _deleteLast,
-                    onClear: _clearAll,
-                  ),
-                  const SizedBox(height: 8),
-                ],
-              ],
-            ),
-          ),
-        ),
-      ),
+      body: FoldAwareBuilder(builder: _buildBody),
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(8.0),

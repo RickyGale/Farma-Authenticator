@@ -182,14 +182,20 @@
       "languageVersion": "3.11"
     },
     {
+      "name": "foldable",
+      "rootUri": "file:///Users/riccardo/.pub-cache/hosted/pub.dev/foldable-1.0.5",
+      "packageUri": "lib/",
+      "languageVersion": "3.5"
+    },
+    {
       "name": "google_mlkit_commons",
-      "rootUri": "file:///Users/riccardo/.pub-cache/hosted/pub.dev/google_mlkit_commons-0.8.1",
+      "rootUri": "../packages/google_mlkit_commons",
       "packageUri": "lib/",
       "languageVersion": "2.16"
     },
     {
       "name": "google_mlkit_text_recognition",
-      "rootUri": "file:///Users/riccardo/.pub-cache/hosted/pub.dev/google_mlkit_text_recognition-0.13.1",
+      "rootUri": "../packages/google_mlkit_text_recognition",
       "packageUri": "lib/",
       "languageVersion": "2.16"
     },

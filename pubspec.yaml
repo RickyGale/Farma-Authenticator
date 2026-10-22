@@ -7,9 +7,12 @@ environment:
   sdk: ^3.8.1
 
 dependencies:
+  foldable: ^1.0.0
   android_id: ^0.5.1
   camera: ^0.12.1
-  google_mlkit_text_recognition: ^0.13.1
+  # Copia locale solo Android (su iOS il testo si legge con Apple Vision).
+  google_mlkit_text_recognition:
+    path: packages/google_mlkit_text_recognition
   crypto: ^3.0.3
   device_info_plus: ^13.2.0
   ffi: ^2.1.0
