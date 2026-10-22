@@ -28,6 +28,7 @@ dependencies:
   window_size: ^0.2.0
   local_notifier: ^0.1.6
   win32: ^6.4.0
+  adaptive_platform_ui: ^1.0.2
 
 dev_dependencies:
   flutter_test:

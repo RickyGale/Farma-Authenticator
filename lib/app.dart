@@ -1,3 +1,4 @@
+import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
 import 'package:flutter/material.dart';
 import 'package:foldable/foldable.dart';
 
@@ -9,11 +10,15 @@ class FarmaAuthApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     // Su iPhone Duo espone piega e size class; altrove non fa nulla.
-    return const FoldableProvider(
+    return FoldableProvider(
       child: MaterialApp(
         title: 'Farma auth',
-        home: ReverseHomePage(),
+        home: const ReverseHomePage(),
         debugShowCheckedModeBanner: false,
+        // Toolbar fissa sopra il navigator (iOS 26+). Lo Scaffold trasparente
+        // serve perché su iOS AdaptiveScaffold disegna una pagina Cupertino:
+        // senza, SnackBar, TextField e stili di testo Material non funzionano.
+        builder: (context, child) => Scaffold(backgroundColor: Colors.transparent, resizeToAvoidBottomInset: false, body: AdaptiveToolbarHost(child: child!)),
       ),
     );
   }

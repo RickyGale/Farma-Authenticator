@@ -3,6 +3,7 @@ import 'dart:ffi' as ffi;
 import 'dart:io';
 import 'dart:math' as math;
 
+import 'package:adaptive_platform_ui/adaptive_platform_ui.dart';
 import 'package:camera/camera.dart';
 import 'package:ffi/ffi.dart';
 import 'package:foldable/foldable.dart';
@@ -1001,15 +1002,10 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     BoxConstraints constraints,
     FoldInfo fold,
   ) {
-    // Affiancati solo in orizzontale: aperto in verticale il tastierino va
-    // sotto, come sul telefono normale.
-    final landscape = constraints.maxWidth > constraints.maxHeight;
-    final twoPanes =
-        !Platform.isWindows &&
-        (fold.spansDivision ||
-            (landscape &&
-                (fold.isRegularWidth ||
-                    constraints.maxWidth >= _twoPaneMinWidth)));
+    // Decidono postura e size class, non l'angolo. La larghezza conta solo
+    // dove iOS non fornisce la size class (Android).
+    final noSizeClass = fold.horizontalSizeClass == SizeClass.unspecified;
+    final twoPanes = !Platform.isWindows && (fold.spansDivision || fold.isRegularWidth || (noSizeClass && constraints.maxWidth >= _twoPaneMinWidth));
     if (!twoPanes) {
       return _buildPane(
         Column(
@@ -1137,52 +1133,61 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     ];
   }
 
+  Widget _buildFooter() {
+    return Padding(
+      padding: const EdgeInsets.all(8.0),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            "versione: $_version scadenza: $_datascadenza",
+            style: const TextStyle(
+              fontSize: 10,
+              color: Colors.grey,
+              fontFamily: 'monospace',
+            ),
+            textAlign: TextAlign.center,
+          ),
+          GestureDetector(
+            onTap: _showUuidLens,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Tooltip(
+                  message: _lAppAttiva ? 'App attiva' : 'App non attiva',
+                  child: StatusLed(on: _lAppAttiva, size: 10),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  _generatedUUID,
+                  style: const TextStyle(
+                    fontSize: 14,
+                    color: Colors.grey,
+                    fontFamily: 'monospace',
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: Platform.isWindows
-          ? null
-          : AppBar(title: const Text('Farma authenticator')),
-      body: FoldAwareBuilder(builder: _buildBody),
-      bottomNavigationBar: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text(
-                "versione: $_version scadenza: $_datascadenza",
-                style: const TextStyle(
-                  fontSize: 10,
-                  color: Colors.grey,
-                  fontFamily: 'monospace',
-                ),
-                textAlign: TextAlign.center,
-              ),
-              GestureDetector(
-                onTap: _showUuidLens,
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Tooltip(
-                      message: _lAppAttiva ? 'App attiva' : 'App non attiva',
-                      child: StatusLed(on: _lAppAttiva, size: 10),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _generatedUUID,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        color: Colors.grey,
-                        fontFamily: 'monospace',
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
-                ),
-              ),
-            ],
-          ),
+    // AdaptiveScaffold accetta in fondo solo una tab bar: il footer sta nel
+    // body. La SafeArea tiene il contenuto fuori dalla striscia laterale del
+    // Duo chiuso e dall'indicatore home.
+    return AdaptiveScaffold(
+      appBar: Platform.isWindows ? null : AdaptiveAppBar(title: 'Farma authenticator'),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(child: FoldAwareBuilder(builder: _buildBody)),
+            _buildFooter(),
+          ],
         ),
       ),
     );

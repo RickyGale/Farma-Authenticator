@@ -7,6 +7,7 @@
       "name": "farma_auth",
       "version": "1.13.06+8",
       "dependencies": [
+        "adaptive_platform_ui",
         "android_id",
         "camera",
         "crypto",
@@ -68,6 +69,14 @@
         "stream_channel",
         "test_api",
         "vector_math"
+      ]
+    },
+    {
+      "name": "adaptive_platform_ui",
+      "version": "1.0.2",
+      "dependencies": [
+        "flutter",
+        "foldable"
       ]
     },
     {
@@ -233,6 +242,14 @@
       "version": "0.5.2+1",
       "dependencies": [
         "flutter"
+      ]
+    },
+    {
+      "name": "foldable",
+      "version": "1.0.5",
+      "dependencies": [
+        "flutter",
+        "plugin_platform_interface"
       ]
     },
     {
@@ -612,6 +629,13 @@
       ]
     },
     {
+      "name": "plugin_platform_interface",
+      "version": "2.1.8",
+      "dependencies": [
+        "meta"
+      ]
+    },
+    {
       "name": "string_scanner",
       "version": "1.4.1",
       "dependencies": [
@@ -721,13 +745,6 @@
       ]
     },
     {
-      "name": "plugin_platform_interface",
-      "version": "2.1.8",
-      "dependencies": [
-        "meta"
-      ]
-    },
-    {
       "name": "path_provider_linux",
       "version": "2.2.2",
       "dependencies": [
@@ -778,14 +795,6 @@
       "dependencies": [
         "meta",
         "path"
-      ]
-    },
-    {
-      "name": "foldable",
-      "version": "1.0.5",
-      "dependencies": [
-        "flutter",
-        "plugin_platform_interface"
       ]
     }
   ],

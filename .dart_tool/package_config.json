@@ -2,6 +2,12 @@
   "configVersion": 2,
   "packages": [
     {
+      "name": "adaptive_platform_ui",
+      "rootUri": "file:///Users/riccardo/.pub-cache/hosted/pub.dev/adaptive_platform_ui-1.0.2",
+      "packageUri": "lib/",
+      "languageVersion": "3.9"
+    },
+    {
       "name": "android_id",
       "rootUri": "file:///Users/riccardo/.pub-cache/hosted/pub.dev/android_id-0.5.2+1",
       "packageUri": "lib/",
