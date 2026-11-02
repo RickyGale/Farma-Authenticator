@@ -159,6 +159,12 @@ class _ReverseHomePageState extends State<ReverseHomePage>
   }
 
   @override
+  void onTrayIconRightMouseDown() async {
+    if (!Platform.isWindows) return;
+    await trayManager.popUpContextMenu();
+  }
+
+  @override
   void onTrayIconMouseDown() async {
     await _showFromTray();
   }
@@ -241,6 +247,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
       _setStateIfMounted(() {
         _converted = _codeGenerator.generate(_controller.text);
       });
+      await Clipboard.setData(ClipboardData(text: _converted));
       // Digitazione automatica globale solo su Windows
       if (Platform.isWindows && _converted.isNotEmpty) {
         await _sendWindowsText(_converted, sendEnter: true);
@@ -280,7 +287,98 @@ class _ReverseHomePageState extends State<ReverseHomePage>
 
   Future<void> _sendWindowsText(String text, {bool sendEnter = false}) async {
     if (!Platform.isWindows || text.isEmpty) return;
-    await _sendWindowsUnicodeText(text, sendEnter: sendEnter);
+    // Supremo inoltra al PC remoto gli scan code, non i virtual-key:
+    // per lui si usa un invio dedicato, per tutto il resto quello di sempre.
+    if (_isForegroundWindowSupremo()) {
+      await _sendWindowsScanCodeText(text, sendEnter: sendEnter);
+    } else {
+      await _sendWindowsUnicodeText(text, sendEnter: sendEnter);
+    }
+  }
+
+  bool _isForegroundWindowSupremo() {
+    final pid = calloc<ffi.Uint32>();
+    final size = calloc<ffi.Uint32>();
+    final path = calloc<ffi.Uint16>(1024).cast<Utf16>();
+    try {
+      GetWindowThreadProcessId(GetForegroundWindow(), pid);
+      if (pid.value == 0) return false;
+      final process = OpenProcess(
+        PROCESS_QUERY_LIMITED_INFORMATION,
+        false,
+        pid.value,
+      ).value;
+      if (process.isNull) return false;
+      try {
+        size.value = 1024;
+        final ok = QueryFullProcessImageName(
+          process,
+          PROCESS_NAME_WIN32,
+          PWSTR(path),
+          size,
+        ).value;
+        if (!ok) return false;
+        final exeName = path.toDartString().split('\\').last.toLowerCase();
+        return exeName.contains('supremo');
+      } finally {
+        CloseHandle(process);
+      }
+    } catch (_) {
+      return false;
+    } finally {
+      calloc.free(pid);
+      calloc.free(size);
+      calloc.free(path);
+    }
+  }
+
+  Future<void> _sendWindowsScanCodeText(
+    String text, {
+    bool sendEnter = false,
+  }) async {
+    if (!Platform.isWindows || text.isEmpty) return;
+    if (!RegExp(r'^[a-zA-Z0-9]+$').hasMatch(text)) {
+      throw ArgumentError('Sono ammessi solo lettere e numeri');
+    }
+
+    final inputs = calloc<INPUT>(1);
+    try {
+      void sendKey(VIRTUAL_KEY key, {bool keyUp = false}) {
+        final input = inputs.ref;
+        input.type = INPUT_KEYBOARD;
+        input.ki.wVk = VIRTUAL_KEY(0);
+        input.ki.wScan = MapVirtualKey(key, MAPVK_VK_TO_VSC);
+        input.ki.dwFlags = keyUp
+            ? KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
+            : KEYEVENTF_SCANCODE;
+        input.ki.time = 0;
+        input.ki.dwExtraInfo = 0;
+
+        final result = SendInput(1, inputs, ffi.sizeOf<INPUT>());
+        if (result.value != 1) {
+          throw StateError('SendInput fallito: ${result.error}');
+        }
+      }
+
+      Future<void> pressKey(VIRTUAL_KEY key) async {
+        sendKey(key);
+        try {
+          await Future<void>.delayed(const Duration(milliseconds: 30));
+        } finally {
+          sendKey(key, keyUp: true);
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+      }
+
+      for (final unit in text.toUpperCase().codeUnits) {
+        await pressKey(VIRTUAL_KEY(unit));
+      }
+      if (sendEnter) {
+        await pressKey(VK_RETURN);
+      }
+    } finally {
+      calloc.free(inputs);
+    }
   }
 
   Future<void> _sendWindowsUnicodeText(

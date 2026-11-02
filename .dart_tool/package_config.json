@@ -195,13 +195,21 @@
     },
     {
       "name": "google_mlkit_commons",
+<<<<<<< Updated upstream
       "rootUri": "../packages/google_mlkit_commons",
+=======
+      "rootUri": "file:///C:/Users/galea/AppData/Local/Pub/Cache/hosted/pub.dev/google_mlkit_commons-0.8.1",
+>>>>>>> Stashed changes
       "packageUri": "lib/",
       "languageVersion": "2.16"
     },
     {
       "name": "google_mlkit_text_recognition",
+<<<<<<< Updated upstream
       "rootUri": "../packages/google_mlkit_text_recognition",
+=======
+      "rootUri": "file:///C:/Users/galea/AppData/Local/Pub/Cache/hosted/pub.dev/google_mlkit_text_recognition-0.13.1",
+>>>>>>> Stashed changes
       "packageUri": "lib/",
       "languageVersion": "2.16"
     },
