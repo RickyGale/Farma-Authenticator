@@ -58,3 +58,5 @@ coverage/
 # web/.dart_tool/
 
 # Note: keep pubspec.lock for apps (do NOT ignore)
+# Widget Preview related
+.widget_preview/

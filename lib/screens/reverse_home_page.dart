@@ -864,10 +864,13 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     await controller.dispose();
   }
 
-  Widget _buildCameraScanner() {
+  bool get _cameraOpen => _cameraRequested || (_cameraController?.value.isInitialized ?? false);
+
+  /// [compact]: la preview si restringe allo spazio rimasto (serve un genitore
+  /// con altezza limitata), così il tastierino resta visibile.
+  Widget _buildCameraScanner({bool compact = false}) {
     final controller = _cameraController;
-    if (_cameraRequested ||
-        (controller != null && controller.value.isInitialized)) {
+    if (_cameraOpen) {
       final preview = ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: _scannerSize),
         child: AspectRatio(
@@ -894,17 +897,21 @@ class _ReverseHomePageState extends State<ReverseHomePage>
                             );
                           },
                         ),
+                        // Proporzionale alla preview: il ritaglio OCR in
+                        // _scanCropRect usa gli stessi rapporti.
                         IgnorePointer(
                           child: Center(
-                            child: Container(
-                              width: _scanBoxWidth,
-                              height: _scanBoxHeight,
+                            child: FractionallySizedBox(
+                              widthFactor: _scanBoxWidth / _scannerSize,
+                              heightFactor: _scanBoxHeight / _scannerSize,
+                              child: DecoratedBox(
                               decoration: BoxDecoration(
                                 border: Border.all(
                                   color: Colors.white,
                                   width: 2,
                                 ),
                                 borderRadius: BorderRadius.circular(10),
+                              ),
                               ),
                             ),
                           ),
@@ -941,7 +948,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
       return Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          preview,
+          if (compact) Flexible(child: preview) else preview,
           if (kDebugMode) ...[
             const SizedBox(height: 8),
             Container(
@@ -1006,6 +1013,25 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     // dove iOS non fornisce la size class (Android).
     final noSizeClass = fold.horizontalSizeClass == SizeClass.unspecified;
     final twoPanes = !Platform.isWindows && (fold.spansDivision || fold.isRegularWidth || (noSizeClass && constraints.maxWidth >= _twoPaneMinWidth));
+    if (!twoPanes && _cameraOpen) {
+      // Niente scroll: la preview prende solo lo spazio che avanza e il
+      // tastierino resta sempre a schermo.
+      return Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: _paneMaxWidth),
+            child: Column(
+              children: [
+                ..._buildEntryChildren(compact: true),
+                const SizedBox(height: 8),
+                NumericKeypad(onDigit: _appendDigit, onBackspace: _deleteLast, onClear: _clearAll),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
     if (!twoPanes) {
       return _buildPane(
         Column(
@@ -1083,7 +1109,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     );
   }
 
-  List<Widget> _buildEntryChildren() {
+  List<Widget> _buildEntryChildren({bool compact = false}) {
     return [
       // Codice generato in alto
       Text(
@@ -1091,9 +1117,9 @@ class _ReverseHomePageState extends State<ReverseHomePage>
         style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold),
         textAlign: TextAlign.center,
       ),
-      const SizedBox(height: 16),
+      const SizedBox(height: 1),
       //const Text('Inserisci codice:'),
-      const SizedBox(height: 16),
+      const SizedBox(height: 1),
       TextField(
         controller: _controller,
         maxLength: 6,
@@ -1103,9 +1129,13 @@ class _ReverseHomePageState extends State<ReverseHomePage>
             ? TextInputType.none
             : TextInputType.number,
         readOnly: Platform.isWindows ? false : true,
-        decoration: const InputDecoration(
-          border: OutlineInputBorder(),
+        decoration: InputDecoration(
+          border: const OutlineInputBorder(),
           hintText: 'es: 123456',
+          // Il contatore "0/6" occupa una riga: con la camera aperta serve
+          // quello spazio.
+          counterText: compact ? '' : null,
+          isDense: compact,
         ),
         inputFormatters: [
           FilteringTextInputFormatter.digitsOnly,
@@ -1127,8 +1157,8 @@ class _ReverseHomePageState extends State<ReverseHomePage>
         ),
       ],
       if (Platform.isAndroid || Platform.isIOS) ...[
-        const SizedBox(height: 12),
-        _buildCameraScanner(),
+        SizedBox(height: compact ? 8 : 12),
+        if (compact) Flexible(child: _buildCameraScanner(compact: true)) else _buildCameraScanner(),
       ],
     ];
   }
