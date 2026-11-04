@@ -1212,7 +1212,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
       // Codice generato in alto
       Text(
         _converted,
-        style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold),
+        style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.black),
         textAlign: TextAlign.center,
       ),
       const SizedBox(height: 1),
