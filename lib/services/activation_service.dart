@@ -25,6 +25,25 @@ class ActivationService {
     required String platform,
     required String version,
   }) async {
+    final result = await _registerOnServer(
+      deviceId: deviceId,
+      platform: platform,
+      version: version,
+    );
+    if (!Platform.isWindows) return result;
+    // Su Windows attivano i file (come MM5): il server registra soltanto il dispositivo
+    return ActivationResult(
+      active: await _windowsRequiredFilesPresent(),
+      expiration: result.expiration,
+      errorMessage: result.errorMessage,
+    );
+  }
+
+  Future<ActivationResult> _registerOnServer({
+    required String deviceId,
+    required String platform,
+    required String version,
+  }) async {
     try {
       final response = await http
           .post(
@@ -63,7 +82,6 @@ class ActivationService {
   Future<ActivationResult> _savedActivation(String errorPrefix) async {
     final prefs = await SharedPreferences.getInstance();
     final stored = prefs.getString('DataScadenza');
-    final filesPresent = await _windowsRequiredFilesPresent();
     var active = false;
     if (stored != null && stored.isNotEmpty) {
       try {
@@ -73,7 +91,7 @@ class ActivationService {
     final expiration = stored ?? '';
     final savedLabel = expiration.isEmpty ? 'nessuna' : expiration;
     return ActivationResult(
-      active: active && (!Platform.isWindows || filesPresent),
+      active: active,
       expiration: expiration,
       errorMessage: '$errorPrefix Uso data salvata: $savedLabel',
     );

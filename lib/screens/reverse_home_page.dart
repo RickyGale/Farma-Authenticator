@@ -374,7 +374,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
         await pressKey(VIRTUAL_KEY(unit));
       }
       if (sendEnter) {
-        await pressKey(VK_RETURN);
+        await pressKey(VK_DOWN);
       }
     } finally {
       calloc.free(inputs);
@@ -421,7 +421,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
         await pressKey(VIRTUAL_KEY(unit));
       }
       if (sendEnter) {
-        await pressKey(VK_RETURN);
+        await pressKey(VK_DOWN);
       }
     } finally {
       calloc.free(inputs);
