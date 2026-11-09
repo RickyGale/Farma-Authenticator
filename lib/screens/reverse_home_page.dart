@@ -13,6 +13,7 @@ import 'package:flutter/services.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'package:intl/intl.dart';
 import 'package:local_notifier/local_notifier.dart';
+import 'package:in_app_update/in_app_update.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tray_manager/tray_manager.dart';
@@ -62,6 +63,8 @@ class _ReverseHomePageState extends State<ReverseHomePage>
   int diff = 0;
   String _datascadenza = "";
   String _version = "";
+  // Versione minima chiesta dal server, se quella installata è più vecchia
+  String? _versioneRichiesta;
   bool _trayInitialized = false;
   CameraController? _cameraController;
   Future<void>? _cameraRelease;
@@ -221,12 +224,13 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     final result = await _activationService.register(
       deviceId: deviceId,
       platform: Theme.of(context).platform.name,
-      version: _version,
     );
     _setStateIfMounted(() {
       _lAppAttiva = result.active;
       _datascadenza = result.expiration;
+      _versioneRichiesta = result.requiredVersion;
     });
+    if (result.updateRequired) unawaited(_avviaAggiornamentoAndroid());
     if (!mounted || result.errorMessage == null) return;
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger != null) {
@@ -285,103 +289,14 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     }
   }
 
-  Future<void> _sendWindowsText(String text, {bool sendEnter = false}) async {
-    if (!Platform.isWindows || text.isEmpty) return;
-    // Supremo inoltra al PC remoto gli scan code, non i virtual-key:
-    // per lui si usa un invio dedicato, per tutto il resto quello di sempre.
-    if (_isForegroundWindowSupremo()) {
-      await _sendWindowsScanCodeText(text, sendEnter: sendEnter);
-    } else {
-      await _sendWindowsUnicodeText(text, sendEnter: sendEnter);
-    }
+  String _describeKey(VIRTUAL_KEY key) {
+    if (key == VK_DOWN) return "'↓' (VK_DOWN)";
+    final isAlnum =
+        (key >= 0x30 && key <= 0x39) || (key >= 0x41 && key <= 0x5A);
+    return isAlnum ? "'${String.fromCharCode(key)}'" : '<vk ${key.toInt()}>';
   }
 
-  bool _isForegroundWindowSupremo() {
-    final pid = calloc<ffi.Uint32>();
-    final size = calloc<ffi.Uint32>();
-    final path = calloc<ffi.Uint16>(1024).cast<Utf16>();
-    try {
-      GetWindowThreadProcessId(GetForegroundWindow(), pid);
-      if (pid.value == 0) return false;
-      final process = OpenProcess(
-        PROCESS_QUERY_LIMITED_INFORMATION,
-        false,
-        pid.value,
-      ).value;
-      if (process.isNull) return false;
-      try {
-        size.value = 1024;
-        final ok = QueryFullProcessImageName(
-          process,
-          PROCESS_NAME_WIN32,
-          PWSTR(path),
-          size,
-        ).value;
-        if (!ok) return false;
-        final exeName = path.toDartString().split('\\').last.toLowerCase();
-        return exeName.contains('supremo');
-      } finally {
-        CloseHandle(process);
-      }
-    } catch (_) {
-      return false;
-    } finally {
-      calloc.free(pid);
-      calloc.free(size);
-      calloc.free(path);
-    }
-  }
-
-  Future<void> _sendWindowsScanCodeText(
-    String text, {
-    bool sendEnter = false,
-  }) async {
-    if (!Platform.isWindows || text.isEmpty) return;
-    if (!RegExp(r'^[a-zA-Z0-9]+$').hasMatch(text)) {
-      throw ArgumentError('Sono ammessi solo lettere e numeri');
-    }
-
-    final inputs = calloc<INPUT>(1);
-    try {
-      void sendKey(VIRTUAL_KEY key, {bool keyUp = false}) {
-        final input = inputs.ref;
-        input.type = INPUT_KEYBOARD;
-        input.ki.wVk = VIRTUAL_KEY(0);
-        input.ki.wScan = MapVirtualKey(key, MAPVK_VK_TO_VSC);
-        input.ki.dwFlags = keyUp
-            ? KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
-            : KEYEVENTF_SCANCODE;
-        input.ki.time = 0;
-        input.ki.dwExtraInfo = 0;
-
-        final result = SendInput(1, inputs, ffi.sizeOf<INPUT>());
-        if (result.value != 1) {
-          throw StateError('SendInput fallito: ${result.error}');
-        }
-      }
-
-      Future<void> pressKey(VIRTUAL_KEY key) async {
-        sendKey(key);
-        try {
-          await Future<void>.delayed(const Duration(milliseconds: 30));
-        } finally {
-          sendKey(key, keyUp: true);
-        }
-        await Future<void>.delayed(const Duration(milliseconds: 40));
-      }
-
-      for (final unit in text.toUpperCase().codeUnits) {
-        await pressKey(VIRTUAL_KEY(unit));
-      }
-      if (sendEnter) {
-        await pressKey(VK_DOWN);
-      }
-    } finally {
-      calloc.free(inputs);
-    }
-  }
-
-  Future<void> _sendWindowsUnicodeText(
+  Future<void> _sendWindowsText(
     String text, {
     bool sendEnter = false,
   }) async {
@@ -397,6 +312,11 @@ class _ReverseHomePageState extends State<ReverseHomePage>
         input.type = INPUT_KEYBOARD;
         input.ki.wVk = key;
         input.ki.wScan = 0;
+        debugPrint(
+          '[sendKey] ${_describeKey(key)} '
+          'vk=0x${key.toRadixString(16)} '
+          '${keyUp ? 'UP' : 'DOWN'}',
+        );
         input.ki.dwFlags = keyUp ? KEYEVENTF_KEYUP : const KEYBD_EVENT_FLAGS(0);
         input.ki.time = 0;
         input.ki.dwExtraInfo = 0;
@@ -601,7 +521,19 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     if (_controller.text.length == 6 && !_autoSubmitted) {
       _autoSubmitted = true;
       FocusScope.of(context).unfocus();
-      if (_lAppAttiva) {
+      if (_versioneRichiesta != null) {
+        ScaffoldMessenger.of(context)
+          ..clearSnackBars()
+          ..showSnackBar(
+            SnackBar(
+              content: Text(
+                'Devi aggiornare l\'app alla versione $_versioneRichiesta.',
+              ),
+              duration: const Duration(seconds: 2),
+              behavior: SnackBarBehavior.floating,
+            ),
+          );
+      } else if (_lAppAttiva) {
         _convertiInBase32();
       } else {
         // Avvisa l'utente che l'app non è attiva
@@ -1261,6 +1193,58 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     ];
   }
 
+  /// Su Android apre l'aggiornamento a schermo intero del Play Store.
+  /// Funziona solo se l'app è installata dal Play Store e lì c'è già la
+  /// versione nuova; altrimenti resta il messaggio "Devi aggiornare".
+  Future<void> _avviaAggiornamentoAndroid() async {
+    if (!Platform.isAndroid) return;
+    try {
+      final info = await InAppUpdate.checkForUpdate();
+      debugPrint(
+        'Aggiornamento Play: ${info.updateAvailability}, '
+        'immediato consentito: ${info.immediateUpdateAllowed}',
+      );
+      if (info.updateAvailability == UpdateAvailability.updateAvailable &&
+          info.immediateUpdateAllowed) {
+        final result = await InAppUpdate.performImmediateUpdate();
+        debugPrint('Esito aggiornamento Play: $result');
+      }
+    } catch (error) {
+      // Es. app installata da Android Studio o da APK, non dal Play Store
+      debugPrint('Aggiornamento Play non disponibile: $error');
+    }
+  }
+
+  Widget _buildUpdateBanner() {
+    return Container(
+      width: double.infinity,
+      margin: const EdgeInsets.all(8),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.red.shade700,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            'Devi aggiornare l\'app\n'
+            'Versione installata $_version, richiesta $_versioneRichiesta',
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+            textAlign: TextAlign.center,
+          ),
+          // Se l'utente ha annullato l'aggiornamento, può riaprirlo da qui
+          if (Platform.isAndroid)
+            TextButton(
+              onPressed: _avviaAggiornamentoAndroid,
+              style: TextButton.styleFrom(foregroundColor: Colors.white),
+              child: const Text('Aggiorna'),
+            ),
+        ],
+      ),
+    );
+  }
+
   Widget _buildFooter() {
     return Padding(
       padding: const EdgeInsets.all(8.0),
@@ -1313,6 +1297,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
       body: SafeArea(
         child: Column(
           children: [
+            if (_versioneRichiesta != null) _buildUpdateBanner(),
             Expanded(child: FoldAwareBuilder(builder: _buildBody)),
             _buildFooter(),
           ],

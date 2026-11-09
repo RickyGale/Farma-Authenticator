@@ -1,7 +1,7 @@
 name: farma_auth
 description: "Internal use app for Farmaconsult employees to authenticate themself."
 publish_to: 'none'
-version: 1.13.07+9
+version: 1.13.08
 
 environment:
   sdk: ^3.8.1
@@ -29,6 +29,7 @@ dependencies:
   local_notifier: ^0.1.6
   win32: ^6.4.0
   adaptive_platform_ui: ^1.0.2
+  in_app_update: ^5.0.0
 
 dev_dependencies:
   flutter_test:

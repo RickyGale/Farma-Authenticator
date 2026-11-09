@@ -3,28 +3,40 @@ import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config/app_config.dart';
+
+const _expirationKey = 'DataScadenza';
+const _minVersionKey = 'VersioneMinima';
 
 class ActivationResult {
   const ActivationResult({
     required this.active,
     required this.expiration,
+    this.requiredVersion,
     this.errorMessage,
   });
 
   final bool active;
   final String expiration;
+
+  /// Versione minima chiesta dal server, valorizzata solo se quella
+  /// installata è più vecchia: in quel caso l'app va aggiornata.
+  final String? requiredVersion;
   final String? errorMessage;
+
+  bool get updateRequired => requiredVersion != null;
 }
 
 class ActivationService {
   Future<ActivationResult> register({
     required String deviceId,
     required String platform,
-    required String version,
   }) async {
+    // Letta qui e non passata dalla pagina: lì potrebbe non essere ancora pronta
+    final version = (await PackageInfo.fromPlatform()).version;
     final result = await _registerOnServer(
       deviceId: deviceId,
       platform: platform,
@@ -35,6 +47,7 @@ class ActivationService {
     return ActivationResult(
       active: await _windowsRequiredFilesPresent(),
       expiration: result.expiration,
+      requiredVersion: result.requiredVersion,
       errorMessage: result.errorMessage,
     );
   }
@@ -57,18 +70,60 @@ class ActivationService {
           )
           .timeout(const Duration(seconds: 8));
       if (response.statusCode == 200) {
-        final active = _isNotExpired(response.body);
+        // Formato: "dd-MM-yy" oppure "dd-MM-yy;versione_minima"
+        final parts = response.body.trim().split(';');
+        final expiration = parts[0].trim();
+        final minVersion = parts.length > 1 ? parts[1].trim() : '';
+        final active = _isNotExpired(expiration);
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('DataScadenza', response.body);
-        debugPrint('Registrazione ok');
-        return ActivationResult(active: active, expiration: response.body);
+        await prefs.setString(_expirationKey, expiration);
+        // Salvata per non sbloccare l'app vecchia semplicemente andando offline
+        if (minVersion.isEmpty) {
+          await prefs.remove(_minVersionKey);
+        } else {
+          await prefs.setString(_minVersionKey, minVersion);
+        }
+        debugPrint('Registrazione ok: v$version, minima "$minVersion"');
+        return ActivationResult(
+          active: active,
+          expiration: expiration,
+          requiredVersion: _requiredVersion(version, minVersion),
+        );
       }
       debugPrint('Errore server: ${response.statusCode} - ${response.body}');
-      return await _savedActivation('Errore server: ${response.statusCode}.');
+      return await _savedActivation(
+        'Errore server: ${response.statusCode}.',
+        version,
+      );
     } catch (error) {
       debugPrint('Errore rete: $error');
-      return _savedActivation('Errore rete.');
+      return _savedActivation('Errore rete.', version);
     }
+  }
+
+  /// [minVersion] se [version] è più vecchia, altrimenti null.
+  String? _requiredVersion(String version, String minVersion) {
+    if (minVersion.isEmpty) return null;
+    return _compareVersions(version, minVersion) < 0 ? minVersion : null;
+  }
+
+  /// Confronta "1.13.07" con "1.14.0" parte per parte, come numeri;
+  /// l'eventuale "+build" viene ignorato.
+  int _compareVersions(String a, String b) {
+    List<int> parse(String v) => v
+        .split('+')
+        .first
+        .split('.')
+        .map((p) => int.tryParse(p.trim()) ?? 0)
+        .toList();
+    final pa = parse(a);
+    final pb = parse(b);
+    for (var i = 0; i < pa.length || i < pb.length; i++) {
+      final x = i < pa.length ? pa[i] : 0;
+      final y = i < pb.length ? pb[i] : 0;
+      if (x != y) return x.compareTo(y);
+    }
+    return 0;
   }
 
   /// Attiva solo se la scadenza è successiva a oggi: il giorno di scadenza
@@ -79,9 +134,13 @@ class ActivationService {
     return DateFormat('dd-MM-yy').parse(expiration).isAfter(today);
   }
 
-  Future<ActivationResult> _savedActivation(String errorPrefix) async {
+  Future<ActivationResult> _savedActivation(
+    String errorPrefix,
+    String version,
+  ) async {
     final prefs = await SharedPreferences.getInstance();
-    final stored = prefs.getString('DataScadenza');
+    final stored = prefs.getString(_expirationKey);
+    final minVersion = prefs.getString(_minVersionKey) ?? '';
     var active = false;
     if (stored != null && stored.isNotEmpty) {
       try {
@@ -93,6 +152,7 @@ class ActivationService {
     return ActivationResult(
       active: active,
       expiration: expiration,
+      requiredVersion: _requiredVersion(version, minVersion),
       errorMessage: '$errorPrefix Uso data salvata: $savedLabel',
     );
   }

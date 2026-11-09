@@ -224,6 +224,12 @@
       "languageVersion": "3.0"
     },
     {
+      "name": "in_app_update",
+      "rootUri": "file:///C:/Users/galea/AppData/Local/Pub/Cache/hosted/pub.dev/in_app_update-5.0.0",
+      "packageUri": "lib/",
+      "languageVersion": "3.12"
+    },
+    {
       "name": "intl",
       "rootUri": "file:///C:/Users/galea/AppData/Local/Pub/Cache/hosted/pub.dev/intl-0.20.3",
       "packageUri": "lib/",
