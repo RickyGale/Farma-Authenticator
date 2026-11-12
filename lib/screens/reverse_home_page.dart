@@ -69,6 +69,8 @@ class _ReverseHomePageState extends State<ReverseHomePage>
   CameraController? _cameraController;
   Future<void>? _cameraRelease;
   bool _cameraRequested = false;
+  // Pieghevole chiuso (schermo esterno): la fotocamera non ci sta
+  bool _schermoChiuso = false;
   bool _cameraInitializing = false;
   bool _isReadingFrame = false;
   String? _cameraError;
@@ -230,7 +232,11 @@ class _ReverseHomePageState extends State<ReverseHomePage>
       _datascadenza = result.expiration;
       _versioneRichiesta = result.requiredVersion;
     });
-    if (result.updateRequired) unawaited(_avviaAggiornamentoAndroid());
+    if (result.updateRequired) {
+      // Con l'app da aggiornare la fotocamera non serve
+      unawaited(_closeCameraScanner());
+      unawaited(_avviaAggiornamentoAndroid());
+    }
     if (!mounted || result.errorMessage == null) return;
     final messenger = ScaffoldMessenger.maybeOf(context);
     if (messenger != null) {
@@ -254,7 +260,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
       await Clipboard.setData(ClipboardData(text: _converted));
       // Digitazione automatica globale solo su Windows
       if (Platform.isWindows && _converted.isNotEmpty) {
-        await _sendWindowsText(_converted, sendEnter: true);
+        await _sendWindowsText(_converted, sendEnter: false); // per ora non lo mandiamo.
         // Feedback: SnackBar se visibile, altrimenti notifica di sistema
         try {
           final isVisible = await windowManager.isVisible();
@@ -590,7 +596,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
   }
 
   Future<void> _openCameraScanner() async {
-    if (_cameraRequested) return;
+    if (_cameraRequested || _versioneRichiesta != null || _schermoChiuso) return;
     _cameraRequested = true;
     await _initializeCamera();
   }
@@ -1034,15 +1040,18 @@ class _ReverseHomePageState extends State<ReverseHomePage>
   static const double _paneGap = 40;
   static const double _paneMaxWidth = 440;
 
-  Widget _buildBody(
-    BuildContext context,
-    BoxConstraints constraints,
-    FoldInfo fold,
-  ) {
+  Widget _buildBody(BuildContext context, BoxConstraints constraints, FoldInfo fold) {
+    // Pieghevole chiuso: si chiude la fotocamera dopo il frame, non durante il build
+    _schermoChiuso = fold.isClosed;
+    if (_schermoChiuso && _cameraOpen) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => unawaited(_closeCameraScanner()));
+    }
     // Decidono postura e size class, non l'angolo. La larghezza conta solo
     // dove iOS non fornisce la size class (Android).
     final noSizeClass = fold.horizontalSizeClass == SizeClass.unspecified;
-    final twoPanes = !Platform.isWindows && (fold.spansDivision || fold.isRegularWidth || (noSizeClass && constraints.maxWidth >= _twoPaneMinWidth));
+    // divisionRect != null: sui pieghevoli Android la piega ha spessore 0,
+    // quindi spansDivision è falso anche da semiaperto.
+    final twoPanes = !Platform.isWindows && (fold.spansDivision || fold.divisionRect != null || fold.isRegularWidth || (noSizeClass && constraints.maxWidth >= _twoPaneMinWidth));
     if (!twoPanes && _cameraOpen) {
       // Niente scroll: la preview prende solo lo spazio che avanza e il
       // tastierino resta sempre a schermo.
@@ -1186,7 +1195,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
           textAlign: TextAlign.center,
         ),
       ],
-      if (Platform.isAndroid || Platform.isIOS) ...[
+      if ((Platform.isAndroid || Platform.isIOS) && !_schermoChiuso) ...[
         SizedBox(height: compact ? 8 : 12),
         if (compact) Flexible(child: _buildCameraScanner(compact: true)) else _buildCameraScanner(),
       ],
@@ -1215,32 +1224,46 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     }
   }
 
+  /// Avviso grande al centro: con l'app da aggiornare non si può fare altro.
   Widget _buildUpdateBanner() {
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.all(8),
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.red.shade700,
-        borderRadius: BorderRadius.circular(8),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            'Devi aggiornare l\'app\n'
-            'Versione installata $_version, richiesta $_versioneRichiesta',
-            style: const TextStyle(color: Colors.white, fontSize: 14),
-            textAlign: TextAlign.center,
+    return Center(
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          constraints: const BoxConstraints(maxWidth: _paneMaxWidth),
+          padding: const EdgeInsets.all(28),
+          decoration: BoxDecoration(
+            color: Colors.red.shade700,
+            borderRadius: BorderRadius.circular(16),
           ),
-          // Se l'utente ha annullato l'aggiornamento, può riaprirlo da qui
-          if (Platform.isAndroid)
-            TextButton(
-              onPressed: _avviaAggiornamentoAndroid,
-              style: TextButton.styleFrom(foregroundColor: Colors.white),
-              child: const Text('Aggiorna'),
-            ),
-        ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.system_update, color: Colors.white, size: 64),
+              const SizedBox(height: 16),
+              const Text(
+                'Devi aggiornare l\'app',
+                style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Versione installata $_version\nrichiesta $_versioneRichiesta',
+                style: const TextStyle(color: Colors.white, fontSize: 18),
+                textAlign: TextAlign.center,
+              ),
+              // Se l'utente ha annullato l'aggiornamento, può riaprirlo da qui
+              if (Platform.isAndroid) ...[
+                const SizedBox(height: 20),
+                FilledButton(
+                  onPressed: _avviaAggiornamentoAndroid,
+                  style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.red.shade700),
+                  child: const Text('Aggiorna', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                ),
+              ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1287,19 +1310,71 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     );
   }
 
+  /// Titolo con il led di stato accanto: toccandolo si apre il box info.
+  Widget _buildTitle() {
+    return GestureDetector(
+      onTap: _showInfoBox,
+      behavior: HitTestBehavior.opaque,
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Text('Farma authenticator'),
+          const SizedBox(width: 8),
+          Tooltip(message: _lAppAttiva ? 'App attiva' : 'App non attiva', child: StatusLed(on: _lAppAttiva, size: 10)),
+        ],
+      ),
+    );
+  }
+
+  /// Box con le info che prima stavano in fondo alla pagina.
+  void _showInfoBox() {
+    const label = TextStyle(fontSize: 12, color: Colors.grey);
+    const value = TextStyle(fontSize: 14, fontFamily: 'monospace');
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        contentPadding: const EdgeInsets.all(16),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                StatusLed(on: _lAppAttiva, size: 10),
+                const SizedBox(width: 8),
+                Text(_lAppAttiva ? 'App attiva' : 'App non attiva', style: const TextStyle(fontSize: 14)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            const Text('Versione', style: label),
+            Text(_version, style: value),
+            const SizedBox(height: 8),
+            const Text('Scadenza', style: label),
+            Text(_datascadenza.isEmpty ? '-' : _datascadenza, style: value),
+            if (_generatedUUID.isNotEmpty) ...[
+              const SizedBox(height: 8),
+              const Text('ID dispositivo', style: label),
+              SelectableText(_generatedUUID, style: value.copyWith(fontSize: 18, letterSpacing: 1.0)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // AdaptiveScaffold accetta in fondo solo una tab bar: il footer sta nel
     // body. La SafeArea tiene il contenuto fuori dalla striscia laterale del
-    // Duo chiuso e dall'indicatore home.
+    // Duo chiuso e dall'indicatore home. Su Windows non c'è la barra del
+    // titolo, quindi il footer con le info resta lì.
     return AdaptiveScaffold(
-      appBar: Platform.isWindows ? null : AdaptiveAppBar(title: 'Farma authenticator'),
+      appBar: Platform.isWindows ? null : AdaptiveAppBar(title: 'Farma authenticator', titleWidget: _buildTitle()),
       body: SafeArea(
         child: Column(
           children: [
-            if (_versioneRichiesta != null) _buildUpdateBanner(),
-            Expanded(child: FoldAwareBuilder(builder: _buildBody)),
-            _buildFooter(),
+            Expanded(child: _versioneRichiesta != null ? _buildUpdateBanner() : FoldAwareBuilder(builder: _buildBody)),
+            if (Platform.isWindows) _buildFooter(),
           ],
         ),
       ),

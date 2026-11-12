@@ -66,3 +66,9 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    // Stato della piega sui pieghevoli (vedi MainActivity / FoldableBridge).
+    // Stessa versione già portata dall'embedding Flutter.
+    implementation("androidx.window:window-java:1.2.0")
+}

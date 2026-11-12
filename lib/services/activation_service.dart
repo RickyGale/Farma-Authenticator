@@ -43,11 +43,12 @@ class ActivationService {
       version: version,
     );
     if (!Platform.isWindows) return result;
-    // Su Windows attivano i file (come MM5): il server registra soltanto il dispositivo
+    // Su Windows attivano i file (come MM5): il server registra soltanto il
+    // dispositivo. La versione minima vale solo per i telefoni: sui PC
+    // l'aggiornamento si fa reinstallando il setup.
     return ActivationResult(
       active: await _windowsRequiredFilesPresent(),
       expiration: result.expiration,
-      requiredVersion: result.requiredVersion,
       errorMessage: result.errorMessage,
     );
   }

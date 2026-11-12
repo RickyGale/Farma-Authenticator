@@ -60,3 +60,6 @@ coverage/
 # Note: keep pubspec.lock for apps (do NOT ignore)
 # Widget Preview related
 .widget_preview/
+
+# Installer Windows compilato
+installer/output/
