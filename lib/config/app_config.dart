@@ -4,3 +4,7 @@ const trayIconDefaultPath = 'windows/runner/resources/app_icon.ico';
 const clipboardCodeMin = 0;
 const clipboardCodeMax = 999999;
 const registrationUrl = 'https://www.farmaconsult.it/riservate/farma_auth.prg';
+
+// Pagine dello store per l'aggiornamento obbligatorio
+const playStoreUrl = 'https://play.google.com/store/apps/details?id=com.farmaconsult.farma_auth';
+const appStoreUrl = 'https://apps.apple.com/app/id6749611416';

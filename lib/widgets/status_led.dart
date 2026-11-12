@@ -15,7 +15,7 @@ class StatusLed extends StatelessWidget {
       decoration: BoxDecoration(
         color: color,
         shape: BoxShape.circle,
-        border: Border.all(color: Colors.black26),
+        border: Border.all(color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.26)),
         boxShadow: [
           BoxShadow(color: color.withValues(alpha: 0.5), blurRadius: 4),
         ],

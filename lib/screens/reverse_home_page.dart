@@ -17,6 +17,7 @@ import 'package:in_app_update/in_app_update.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:tray_manager/tray_manager.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:win32/win32.dart';
 import 'package:window_manager/window_manager.dart';
 
@@ -1153,7 +1154,7 @@ class _ReverseHomePageState extends State<ReverseHomePage>
       // Codice generato in alto
       Text(
         _converted,
-        style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.black),
+        style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold),
         textAlign: TextAlign.center,
       ),
       const SizedBox(height: 1),
@@ -1204,9 +1205,9 @@ class _ReverseHomePageState extends State<ReverseHomePage>
 
   /// Su Android apre l'aggiornamento a schermo intero del Play Store.
   /// Funziona solo se l'app è installata dal Play Store e lì c'è già la
-  /// versione nuova; altrimenti resta il messaggio "Devi aggiornare".
-  Future<void> _avviaAggiornamentoAndroid() async {
-    if (!Platform.isAndroid) return;
+  /// versione nuova. Restituisce true se l'aggiornamento è partito.
+  Future<bool> _avviaAggiornamentoAndroid() async {
+    if (!Platform.isAndroid) return false;
     try {
       final info = await InAppUpdate.checkForUpdate();
       debugPrint(
@@ -1217,54 +1218,85 @@ class _ReverseHomePageState extends State<ReverseHomePage>
           info.immediateUpdateAllowed) {
         final result = await InAppUpdate.performImmediateUpdate();
         debugPrint('Esito aggiornamento Play: $result');
+        return result == AppUpdateResult.success;
       }
     } catch (error) {
       // Es. app installata da Android Studio o da APK, non dal Play Store
       debugPrint('Aggiornamento Play non disponibile: $error');
     }
+    return false;
   }
 
-  /// Avviso grande al centro: con l'app da aggiornare non si può fare altro.
-  Widget _buildUpdateBanner() {
-    return Center(
-      child: SingleChildScrollView(
-        padding: const EdgeInsets.all(24),
-        child: Container(
-          constraints: const BoxConstraints(maxWidth: _paneMaxWidth),
-          padding: const EdgeInsets.all(28),
-          decoration: BoxDecoration(
-            color: Colors.red.shade700,
-            borderRadius: BorderRadius.circular(16),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.system_update, color: Colors.white, size: 64),
-              const SizedBox(height: 16),
-              const Text(
-                'Devi aggiornare l\'app',
-                style: TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 12),
-              Text(
-                'Versione installata $_version\nrichiesta $_versioneRichiesta',
-                style: const TextStyle(color: Colors.white, fontSize: 18),
-                textAlign: TextAlign.center,
-              ),
-              // Se l'utente ha annullato l'aggiornamento, può riaprirlo da qui
-              if (Platform.isAndroid) ...[
-                const SizedBox(height: 20),
-                FilledButton(
-                  onPressed: _avviaAggiornamentoAndroid,
-                  style: FilledButton.styleFrom(backgroundColor: Colors.white, foregroundColor: Colors.red.shade700),
-                  child: const Text('Aggiorna', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+  /// Pulsante "Aggiorna": su Android prova l'aggiornamento interno e, se non
+  /// parte, apre la pagina del Play Store; su iOS apre l'App Store.
+  Future<void> _apriStore() async {
+    if (Platform.isAndroid && await _avviaAggiornamentoAndroid()) return;
+    final url = Uri.parse(Platform.isIOS ? appStoreUrl : playStoreUrl);
+    try {
+      // externalApplication: il link si apre nell'app dello store, non nel browser
+      await launchUrl(url, mode: LaunchMode.externalApplication);
+    } catch (error) {
+      debugPrint('Impossibile aprire lo store: $error');
+    }
+  }
+
+  /// Popup di aggiornamento obbligatorio: l'app resta visibile dietro, velata,
+  /// ma non si può toccare finché non si aggiorna.
+  Widget _buildUpdateOverlay() {
+    final scheme = Theme.of(context).colorScheme;
+    return Stack(
+      children: [
+        // Velo che oscura l'app e blocca ogni tocco
+        const ModalBarrier(color: Colors.black54, dismissible: false),
+        SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(24),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 360),
+                child: Material(
+                  color: scheme.surface,
+                  elevation: 12,
+                  borderRadius: BorderRadius.circular(20),
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(24, 28, 24, 20),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(Icons.system_update_rounded, color: scheme.primary, size: 44),
+                        const SizedBox(height: 16),
+                        Text(
+                          'Aggiornamento richiesto',
+                          style: Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.w600),
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 10),
+                        Text(
+                          'Per continuare a usare l\'app installa la versione $_versioneRichiesta.\n'
+                          'Versione attuale: $_version',
+                          style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+                          textAlign: TextAlign.center,
+                        ),
+                        // Porta allo store per aggiornare (su Windows si reinstalla il setup)
+                        if (Platform.isAndroid || Platform.isIOS) ...[
+                          const SizedBox(height: 20),
+                          SizedBox(
+                            width: double.infinity,
+                            child: FilledButton(
+                              onPressed: _apriStore,
+                              child: const Text('Aggiorna'),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
                 ),
-              ],
-            ],
+              ),
+            ),
           ),
         ),
-      ),
+      ],
     );
   }
 
@@ -1368,17 +1400,20 @@ class _ReverseHomePageState extends State<ReverseHomePage>
     // body. La SafeArea tiene il contenuto fuori dalla striscia laterale del
     // Duo chiuso e dall'indicatore home. Su Windows non c'è la barra del
     // titolo, quindi il footer con le info resta lì.
-    return AdaptiveScaffold(
+    final scaffold = AdaptiveScaffold(
       appBar: Platform.isWindows ? null : AdaptiveAppBar(title: 'Farma authenticator', titleWidget: _buildTitle()),
       body: SafeArea(
         child: Column(
           children: [
-            Expanded(child: _versioneRichiesta != null ? _buildUpdateBanner() : FoldAwareBuilder(builder: _buildBody)),
+            Expanded(child: FoldAwareBuilder(builder: _buildBody)),
             if (Platform.isWindows) _buildFooter(),
           ],
         ),
       ),
     );
+    if (_versioneRichiesta == null) return scaffold;
+    // Con l'app da aggiornare il popup copre tutto, barra compresa
+    return Stack(children: [scaffold, Positioned.fill(child: _buildUpdateOverlay())]);
   }
 }
 
